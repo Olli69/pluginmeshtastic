@@ -132,3 +132,13 @@
 # Keep Apache Xerces classes
 -keep class org.apache.xerces.** { *; }
 
+# Tink (pulled in by androidx.security:security-crypto for the lockdown
+# passphrase cache) references optional deps the plugin doesn't ship:
+#   - com.google.api.client.http.* — only used by KeysDownloader's remote-key
+#     fetch path; we only use local EncryptedSharedPreferences.
+#   - com.google.errorprone.annotations.* — compile-time annotations.
+-dontwarn com.google.api.client.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn org.joda.time.**
+-dontwarn javax.annotation.**
+
