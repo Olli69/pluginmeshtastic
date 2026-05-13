@@ -8,7 +8,7 @@
 
 buildscript {
 
-    ext.PLUGIN_VERSION = "0.2"
+    ext.PLUGIN_VERSION = "1.0"
     ext.ATAK_VERSION = "5.5.0"
 
     def takdevVersion = '3.+'
@@ -310,6 +310,9 @@ dependencies {
     // AndroidX dependencies
     implementation 'androidx.core:core:1.15.0'
     implementation 'androidx.lifecycle:lifecycle-service:2.8.7'
+
+    // EncryptedSharedPreferences for the lockdown passphrase cache
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     // EXI library for XML processing
     implementation 'com.siemens.ct.exi:exificient:1.0.7'

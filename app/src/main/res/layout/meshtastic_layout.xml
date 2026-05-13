@@ -531,6 +531,43 @@
 
                         </LinearLayout>
 
+                        <!-- Lockdown (hardened-firmware) controls -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:background="#FF2A2A2A"
+                            android:padding="12dp"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Device Lockdown"
+                                android:textSize="16sp"
+                                android:textColor="#FFFFFF"
+                                android:textStyle="bold"
+                                android:paddingBottom="4dp" />
+
+                            <TextView
+                                android:id="@+id/lockdown_status_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Status: unknown"
+                                android:textSize="12sp"
+                                android:textColor="#FFAAAAAA"
+                                android:paddingBottom="8dp" />
+
+                            <Button
+                                android:id="@+id/btn_lock_now"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Lock Now"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#FFCC3333" />
+
+                        </LinearLayout>
+
 
                     </LinearLayout>
                 </ScrollView>

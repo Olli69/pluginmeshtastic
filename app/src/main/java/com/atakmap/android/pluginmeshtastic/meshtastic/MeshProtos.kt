@@ -189,7 +189,8 @@ object MeshProtos {
         val metadata: com.geeksville.mesh.MeshProtos.DeviceMetadata? = null,
         val config: com.geeksville.mesh.ConfigProtos.Config? = null,
         val moduleConfig: com.geeksville.mesh.ModuleConfigProtos.ModuleConfig? = null,
-        val channel: com.geeksville.mesh.ChannelProtos.Channel? = null
+        val channel: com.geeksville.mesh.ChannelProtos.Channel? = null,
+        val lockdownStatus: com.geeksville.mesh.MeshProtos.LockdownStatus? = null
     ) {
         companion object {
             fun parseFrom(data: ByteArray): FromRadio? {
@@ -329,7 +330,11 @@ object MeshProtos {
                         protoFromRadio.hasChannel() -> {
                             FromRadio(channel = protoFromRadio.channel)
                         }
-                        
+
+                        protoFromRadio.hasLockdownStatus() -> {
+                            FromRadio(lockdownStatus = protoFromRadio.lockdownStatus)
+                        }
+
                         else -> {
                             // Unknown or unhandled message type
                             null

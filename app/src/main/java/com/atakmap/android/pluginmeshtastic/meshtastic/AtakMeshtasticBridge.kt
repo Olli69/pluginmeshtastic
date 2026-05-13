@@ -167,11 +167,19 @@ class AtakMeshtasticBridge(
         // Create and initialize the manager
         meshtasticManager = MeshtasticManager(mapViewContext)
         meshtasticManager?.registerAtakMessageHandler(this)
+
+        // Attach any lockdown listener that was registered before the manager existed.
+        attachLockdownListener()
         
         // Set up callback to update device name when NodeInfo is received
         meshtasticManager?.setDeviceNameUpdateCallback { longName ->
             Log.i(TAG, "NodeInfo callback triggered with longName: '$longName'")
             updateStoredDeviceName(longName)
+        }
+
+        // Poke the UI whenever a Config response is cached (region, role, etc.).
+        meshtasticManager?.setConfigUpdateCallback {
+            notifyConfigUpdated()
         }
         
         // Auto-connect if configured
@@ -229,6 +237,20 @@ class AtakMeshtasticBridge(
         }
     }
     
+    /** Notify the DropDownReceiver that fresh Config data was cached. */
+    private fun notifyConfigUpdated() {
+        dropDownReceiver?.let { receiver ->
+            try {
+                val method = receiver::class.java.getMethod("onConfigUpdated")
+                method.invoke(receiver)
+            } catch (_: NoSuchMethodException) {
+                // Receiver doesn't care — silently skip.
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to notify DropDownReceiver of config update", e)
+            }
+        }
+    }
+
     /**
      * Notify the DropDownReceiver that the device name has been updated
      */
@@ -425,6 +447,46 @@ class AtakMeshtasticBridge(
         autoConnectBluetooth = false
         autoConnectUsb = false
         meshtasticManager?.disconnect()
+    }
+
+    /** Lockdown coordinator surface for the UI (state flow + actions). */
+    fun getLockdownCoordinator(): LockdownCoordinator? = meshtasticManager?.lockdownCoordinator
+
+    fun submitLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
+        meshtasticManager?.lockdownCoordinator?.submitPassphrase(passphrase, boots, hours)
+    }
+
+    fun lockNow() {
+        meshtasticManager?.lockdownCoordinator?.lockNow()
+    }
+
+    /** Java-friendly listener for lockdown state changes (delivered on the main thread). */
+    interface LockdownListener {
+        fun onLockdownState(state: LockdownState)
+    }
+
+    private var lockdownListenerJob: Job? = null
+    private var pendingLockdownListener: LockdownListener? = null
+
+    fun setLockdownListener(listener: LockdownListener?) {
+        pendingLockdownListener = listener
+        attachLockdownListener()
+    }
+
+    private fun attachLockdownListener() {
+        lockdownListenerJob?.cancel()
+        lockdownListenerJob = null
+        val listener = pendingLockdownListener ?: return
+        val coord = meshtasticManager?.lockdownCoordinator ?: return // will retry after init
+        lockdownListenerJob = scope.launch {
+            coord.state.collect { state ->
+                try {
+                    listener.onLockdownState(state)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Lockdown listener threw", e)
+                }
+            }
+        }
     }
     
     /**

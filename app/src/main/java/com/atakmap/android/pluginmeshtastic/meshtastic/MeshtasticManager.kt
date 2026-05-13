@@ -13,6 +13,7 @@ import com.geeksville.mesh.AdminProtos
 import com.geeksville.mesh.ConfigProtos
 import com.geeksville.mesh.TelemetryProtos
 import com.geeksville.mesh.Portnums
+import com.google.protobuf.ByteString
 
 /**
  * Result of a message acknowledgment
@@ -190,6 +191,23 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     }
     
     
+    // Lockdown coordinator — drives the passphrase / Lock Now flows when the connected
+    // device runs a MESHTASTIC_LOCKDOWN-hardened firmware build.
+    private val lockdownSender = object : LockdownSender {
+        override fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
+            this@MeshtasticManager.sendLockdownPassphrase(passphrase, boots, hours)
+        }
+        override fun sendLockNow() {
+            this@MeshtasticManager.sendLockNow()
+        }
+        override fun getDeviceAddress(): String? {
+            bluetoothInterface?.let { return it.deviceAddress }
+            usbInterface?.let { return "usb:${it.devicePath.ifEmpty { "default" }}" }
+            return null
+        }
+    }
+    val lockdownCoordinator: LockdownCoordinator = LockdownCoordinator(context, lockdownSender)
+
     init {
         startMessageProcessing()
     }
@@ -331,7 +349,9 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
      */
     fun disconnect() {
         Log.i(TAG, "Disconnecting from Meshtastic device")
-        
+
+        lockdownCoordinator.onDisconnect()
+
         bluetoothInterface?.disconnect()
         bluetoothInterface = null
         
@@ -910,12 +930,20 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     
     // Callback for device name updates
     private var deviceNameUpdateCallback: ((String) -> Unit)? = null
-    
+
     /**
      * Set callback for when device name is updated
      */
     fun setDeviceNameUpdateCallback(callback: (String) -> Unit) {
         deviceNameUpdateCallback = callback
+    }
+
+    // Callback fired whenever a Config response is received and cached. UI uses it to
+    // re-render fields like region/role after the device reboots post-reconfigure.
+    private var configUpdateCallback: (() -> Unit)? = null
+
+    fun setConfigUpdateCallback(callback: (() -> Unit)?) {
+        configUpdateCallback = callback
     }
     
     /**
@@ -1035,6 +1063,8 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
                     Log.w(TAG, "❓ Unknown Config type received")
                 }
             }
+            // Poke the UI so cards reading getLoraConfig() / role / region pick up the new value.
+            configUpdateCallback?.invoke()
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing Config: ${e.message}", e)
         }
@@ -1352,6 +1382,10 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
             fromRadio.logRecord != null -> {
                 Log.d(TAG, "Device log: ${fromRadio.logRecord}")
             }
+
+            fromRadio.lockdownStatus != null -> {
+                lockdownCoordinator.handleLockdownStatus(fromRadio.lockdownStatus)
+            }
             
             fromRadio.routingError != null -> {
                 // Handle routing error (packet failed to deliver)
@@ -1433,6 +1467,10 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
      */
     override fun onConnect() {
         Log.i(TAG, "Radio connected, checking radio state...")
+
+        // Reset per-connection lockdown state. Firmware requires re-auth on every new
+        // connection, even if the device's storage is already unlocked.
+        lockdownCoordinator.onConnect()
 
         // Update connection state to CONNECTED
         _connectionState.value = ConnectionState.CONNECTED
@@ -1596,6 +1634,87 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
         }
     }
     
+    // --- Lockdown wire format -------------------------------------------------------------
+    //
+    // Outbound: AdminMessage.lockdown_auth (oneof tag 104) — typed schema from
+    // meshtastic/protobufs PR #911. Inbound: FromRadio.lockdown_status (oneof tag 18).
+    //
+    // CRITICAL: every MeshPacket field below has to match exactly — the firmware ToRadio
+    // gate while locked is strict.
+    //   - to == myNodeNum                      (firmware checks this)
+    //   - from == 0 (proto default, NOT SET)   (firmware uses from==0 as "local PhoneAPI")
+    //   - portnum == ADMIN_APP
+    //   - decoded payload (not encrypted)
+    //   - pki_encrypted == false               (firmware drops PKI-encrypted ToRadio while locked)
+    //   - hop_limit / hop_start == 7, priority == RELIABLE
+    fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
+        val myNum = myNodeInfo?.myNodeNum?.toInt()
+        if (myNum == null) {
+            Log.w(TAG, "Cannot send lockdown passphrase: myNodeInfo not yet received")
+            return
+        }
+        val validUntilEpoch: Int = if (hours > 0) {
+            // Absolute Unix-epoch seconds; firmware compares with its RTC.
+            ((System.currentTimeMillis() / 1000L) + hours.toLong() * 3600L).toInt()
+        } else {
+            0
+        }
+        val lockdownAuth = AdminProtos.LockdownAuth.newBuilder()
+            .setPassphrase(ByteString.copyFrom(passphrase.toByteArray(Charsets.UTF_8)))
+            .setBootsRemaining(boots.coerceAtLeast(0))
+            .setValidUntilEpoch(validUntilEpoch)
+            .setLockNow(false)
+            .build()
+        val adminMsg = AdminProtos.AdminMessage.newBuilder()
+            .setLockdownAuth(lockdownAuth)
+            .build()
+        sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "passphrase")
+    }
+
+    fun sendLockNow() {
+        val myNum = myNodeInfo?.myNodeNum?.toInt()
+        if (myNum == null) {
+            Log.w(TAG, "Cannot send Lock Now: myNodeInfo not yet received")
+            return
+        }
+        val lockdownAuth = AdminProtos.LockdownAuth.newBuilder()
+            .setLockNow(true)
+            .build()
+        val adminMsg = AdminProtos.AdminMessage.newBuilder()
+            .setLockdownAuth(lockdownAuth)
+            .build()
+        sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "lock-now")
+    }
+
+    private fun sendLockdownAdmin(myNum: Int, payload: ByteArray, label: String) {
+        val data = GeneratedMeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.ADMIN_APP)
+            .setPayload(ByteString.copyFrom(payload))
+            .build()
+        // NOTE: leave `from` unset (proto default = 0). The firmware lockdown path requires
+        // from == 0 ("local PhoneAPI"); never set pki_encrypted here.
+        val packet = GeneratedMeshProtos.MeshPacket.newBuilder()
+            .setTo(myNum)
+            .setId(MeshProtos.DataPacket.generatePacketId())
+            .setChannel(0)
+            .setWantAck(true)
+            .setHopLimit(7)
+            .setHopStart(7)
+            .setPriority(GeneratedMeshProtos.MeshPacket.Priority.RELIABLE)
+            .setDecoded(data)
+            .build()
+        val toRadio = GeneratedMeshProtos.ToRadio.newBuilder()
+            .setPacket(packet)
+            .build()
+        Log.i(TAG, "Sending lockdown admin packet: $label (to=0x${myNum.toLong().and(0xFFFFFFFFL).toString(16)})")
+        val bytes = toRadio.toByteArray()
+        when {
+            bluetoothInterface != null -> bluetoothInterface?.sendData(bytes)
+            usbInterface != null -> usbInterface?.sendData(bytes)
+            else -> Log.w(TAG, "No interface available to send lockdown admin packet")
+        }
+    }
+
     private fun sendConfigRequest() {
         // Send wantConfig request to fetch device configuration
         // Using same approach as official Meshtastic-Android app

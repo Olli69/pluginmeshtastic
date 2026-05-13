@@ -689,7 +689,7 @@ class MeshtasticConfigManager(
                 val lora = config.lora
                 if (!lora.usePreset ||
                     lora.modemPreset != ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_FAST ||
-                    lora.region != ConfigProtos.Config.LoRaConfig.RegionCode.EU_868 ||
+                    lora.region != ConfigProtos.Config.LoRaConfig.RegionCode.US ||
                     !lora.txEnabled ||
                     lora.hopLimit != 6) {
                     needsLoraConfig = true
@@ -944,7 +944,7 @@ class MeshtasticConfigManager(
             .setIgnoreMqtt(true)
             .setConfigOkToMqtt(false)
             .setOverrideDutyCycle(true)
-            .setRegion(ConfigProtos.Config.LoRaConfig.RegionCode.EU_868) // do this last?
+            .setRegion(ConfigProtos.Config.LoRaConfig.RegionCode.US)
             .build()
 
         val config = ConfigProtos.Config.newBuilder().setLora(loraConfig).build()

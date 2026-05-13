@@ -22,7 +22,7 @@ import java.util.concurrent.LinkedBlockingQueue
 
 class UsbSerialInterface(
     private val context: Context,
-    private val devicePath: String,
+    val devicePath: String,
     private val callback: RadioCallback
 ) : SerialInputOutputManager.Listener {
     

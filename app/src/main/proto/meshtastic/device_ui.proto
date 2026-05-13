@@ -71,8 +71,77 @@ message DeviceUIConfig {
    * Map related data
    */
   Map map_data = 15;
-}
 
+  /*
+   * Compass mode
+   */
+  CompassMode compass_mode = 16;
+
+  /*
+   * RGB color for BaseUI
+   * 0xRRGGBB format, e.g. 0xFF0000 for red
+   */
+  uint32 screen_rgb_color = 17;
+
+  /*
+   * Clockface analog style
+   * true for analog clockface, false for digital clockface
+   */
+  bool is_clockface_analog = 18;
+
+  /*
+   * How the GPS coordinates are formatted on the OLED screen.
+   */
+  GpsCoordinateFormat gps_format = 19;
+
+  /*
+   * How the GPS coordinates are displayed on the OLED screen.
+   */
+  enum GpsCoordinateFormat {
+    /*
+     * GPS coordinates are displayed in the normal decimal degrees format:
+     * DD.DDDDDD DDD.DDDDDD
+     */
+    DEC = 0;
+
+    /*
+     * GPS coordinates are displayed in the degrees minutes seconds format:
+     * DD°MM'SS"C DDD°MM'SS"C, where C is the compass point representing the locations quadrant
+     */
+    DMS = 1;
+
+    /*
+     * Universal Transverse Mercator format:
+     * ZZB EEEEEE NNNNNNN, where Z is zone, B is band, E is easting, N is northing
+     */
+    UTM = 2;
+
+    /*
+     * Military Grid Reference System format:
+     * ZZB CD EEEEE NNNNN, where Z is zone, B is band, C is the east 100k square, D is the north 100k square,
+     * E is easting, N is northing
+     */
+    MGRS = 3;
+
+    /*
+     * Open Location Code (aka Plus Codes).
+     */
+    OLC = 4;
+
+    /*
+     * Ordnance Survey Grid Reference (the National Grid System of the UK).
+     * Format: AB EEEEE NNNNN, where A is the east 100k square, B is the north 100k square,
+     * E is the easting, N is the northing
+     */
+    OSGR = 5;
+
+    /*
+     * Maidenhead Locator System
+     * Described here: https://en.wikipedia.org/wiki/Maidenhead_Locator_System
+     */
+    MLS = 6;
+  }
+}
 
 message NodeFilter {
   /*
@@ -109,7 +178,6 @@ message NodeFilter {
    * Filter based on channel
    */
   int32 channel = 7;
-
 }
 
 message NodeHighlight {
@@ -137,7 +205,6 @@ message NodeHighlight {
    * Highlight nodes by matching name string
    */
   string node_name = 5;
-
 }
 
 message GeoPoint {
@@ -146,14 +213,14 @@ message GeoPoint {
    */
   int32 zoom = 1;
 
-   /*
-    * Coordinate: latitude
-    */
+  /*
+   * Coordinate: latitude
+   */
   int32 latitude = 2;
 
-   /*
-    * Coordinate: longitude
-    */
+  /*
+   * Coordinate: longitude
+   */
   int32 longitude = 3;
 }
 
@@ -172,6 +239,23 @@ message Map {
    * Map scroll follows GPS
    */
   bool follow_gps = 3;
+}
+
+enum CompassMode {
+  /*
+   * Compass with dynamic ring and heading
+   */
+  DYNAMIC = 0;
+
+  /*
+   * Compass with fixed ring and heading
+   */
+  FIXED_RING = 1;
+
+  /*
+   * Compass with heading and freeze option
+   */
+  FREEZE_HEADING = 2;
 }
 
 enum Theme {
@@ -278,7 +362,22 @@ enum Language {
    */
   UKRAINIAN = 16;
 
-   /*
+  /*
+   * Bulgarian
+   */
+  BULGARIAN = 17;
+
+  /*
+   * Czech
+   */
+  CZECH = 18;
+
+  /*
+   * Danish
+   */
+  DANISH = 19;
+
+  /*
    * Simplified Chinese (experimental)
    */
   SIMPLIFIED_CHINESE = 30;
@@ -287,4 +386,4 @@ enum Language {
    * Traditional Chinese (experimental)
    */
   TRADITIONAL_CHINESE = 31;
-  }
+}
