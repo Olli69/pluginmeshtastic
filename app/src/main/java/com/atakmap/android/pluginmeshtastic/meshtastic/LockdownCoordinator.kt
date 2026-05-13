@@ -2,27 +2,33 @@ package com.atakmap.android.pluginmeshtastic.meshtastic
 
 import android.content.Context
 import android.util.Log
+import com.geeksville.mesh.MeshProtos as GeneratedMeshProtos
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Hook used by [LockdownCoordinator] to send lockdown AdminMessage packets without dragging
- * the whole [MeshtasticManager] into the unit-test surface.
+ * Hook used by [LockdownCoordinator] to emit AdminMessage.lockdown_auth packets without
+ * dragging the entire [MeshtasticManager] into the unit-test surface.
  */
 interface LockdownSender {
+    /** Send AdminMessage.lockdown_auth with passphrase + boots/hours; lock_now=false. */
     fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int)
+
+    /** Send AdminMessage.lockdown_auth with lock_now=true, empty passphrase. */
     fun sendLockNow()
-    /** Returns the BLE MAC (or USB path) of the currently-connected device, or null. */
+
+    /** BLE MAC (or USB path) of the currently-connected device, or null. */
     fun getDeviceAddress(): String?
 }
 
 /**
- * Coordinates the lockdown handshake — drives a [LockdownState] flow that the UI subscribes
- * to, auto-replays the cached passphrase silently, and only surfaces a dialog when no cached
- * passphrase exists or auto-unlock fails.
+ * Drives the lockdown handshake: handles inbound LockdownStatus events, auto-replays
+ * the cached passphrase silently, surfaces a dialog only when no cached passphrase
+ * exists or auto-unlock fails, and synthesizes [LockdownState.LockNowAcknowledged]
+ * for the firmware's Lock-Now reboot (which may race the BLE disconnect).
  *
- * State is per-BLE-connection: [onConnect] resets the "this connection is authorized" flag
- * (the firmware requires re-auth on every new connection, even if storage is already unlocked).
+ * State is per-BLE-connection: [onConnect] resets the "this connection is authorized"
+ * flag (firmware requires re-auth on every new connection even if storage is unlocked).
  */
 class LockdownCoordinator(
     context: Context,
@@ -33,9 +39,6 @@ class LockdownCoordinator(
     private val _state = MutableStateFlow<LockdownState>(LockdownState.None)
     val state: StateFlow<LockdownState> = _state
 
-    private val _tokenInfo = MutableStateFlow<LockdownTokenInfo?>(null)
-    val tokenInfo: StateFlow<LockdownTokenInfo?> = _tokenInfo
-
     private val _sessionAuthorized = MutableStateFlow(false)
     val sessionAuthorized: StateFlow<Boolean> = _sessionAuthorized
 
@@ -44,61 +47,73 @@ class LockdownCoordinator(
     @Volatile private var pendingBoots: Int = LockdownPassphraseStore.DEFAULT_BOOTS
     @Volatile private var pendingHours: Int = 0
 
-    /** Call when a fresh BLE/USB connection comes up. */
+    /**
+     * Set when the operator has requested Lock Now and we are waiting for the firmware's
+     * acknowledging LOCKED status. The next inbound LOCKED resolves it as
+     * [LockdownState.LockNowAcknowledged]; if the BLE drops first, [onDisconnect] also
+     * resolves it.
+     */
+    @Volatile private var pendingLockNow = false
+
     fun onConnect() {
         _sessionAuthorized.value = false
         wasAutoAttempt = false
         pendingPassphrase = null
         pendingBoots = LockdownPassphraseStore.DEFAULT_BOOTS
         pendingHours = 0
-        // Don't preemptively switch to Locked — wait for the device to tell us.
+        pendingLockNow = false
         _state.value = LockdownState.None
-        _tokenInfo.value = null
     }
 
-    /** Call when the BLE/USB connection drops. */
     fun onDisconnect() {
+        // If a Lock Now was in flight and the BLE dropped before the status arrived,
+        // treat the disconnect itself as the ack so the UI moves on.
+        if (pendingLockNow) {
+            pendingLockNow = false
+            _state.value = LockdownState.LockNowAcknowledged
+        } else {
+            _state.value = LockdownState.None
+        }
         _sessionAuthorized.value = false
         wasAutoAttempt = false
         pendingPassphrase = null
-        _tokenInfo.value = null
-        _state.value = LockdownState.None
     }
 
     /**
-     * Route an incoming ClientNotification message that starts with `LOCKDOWN_`.
-     * Caller is responsible for checking the prefix.
+     * Route an inbound typed LockdownStatus. Caller has already verified
+     * `FromRadio.payload_variant == lockdown_status`.
      */
-    fun handleLockdownNotification(message: String?) {
-        if (message == null) return
-        Log.i(TAG, "Lockdown notification: $message")
-        when {
-            message == LOCKDOWN_NEEDS_PROVISION -> _state.value = LockdownState.NeedsProvision
-            message == LOCKDOWN_LOCKED_ACK -> handleLockNowAcknowledged()
-            message.startsWith(LOCKDOWN_LOCKED_WITH_REASON_PREFIX) -> handleLocked()
-            message.startsWith(LOCKDOWN_UNLOCKED_PREFIX) -> handleUnlocked(message)
-            message.startsWith(LOCKDOWN_UNLOCK_FAILED_PREFIX) -> handleUnlockFailed(message)
-            else -> {
-                Log.w(TAG, "Unrecognized LOCKDOWN_ notification; treating as Locked")
-                _state.value = LockdownState.Locked
+    fun handleLockdownStatus(status: GeneratedMeshProtos.LockdownStatus) {
+        Log.i(TAG, "LockdownStatus: state=${status.state} reason='${status.lockReason}' " +
+                "boots=${status.bootsRemaining} until=${status.validUntilEpoch} " +
+                "backoff=${status.backoffSeconds}")
+        when (status.state) {
+            GeneratedMeshProtos.LockdownStatus.State.NEEDS_PROVISION -> {
+                _state.value = LockdownState.NeedsProvision
+            }
+            GeneratedMeshProtos.LockdownStatus.State.LOCKED -> handleLocked(status.lockReason ?: "")
+            GeneratedMeshProtos.LockdownStatus.State.UNLOCKED -> handleUnlocked(status)
+            GeneratedMeshProtos.LockdownStatus.State.UNLOCK_FAILED -> handleUnlockFailed(status.backoffSeconds)
+            GeneratedMeshProtos.LockdownStatus.State.STATE_UNSPECIFIED,
+            GeneratedMeshProtos.LockdownStatus.State.UNRECOGNIZED -> {
+                Log.w(TAG, "Ignoring LockdownStatus with unspecified/unknown state")
             }
         }
     }
 
-    private fun handleLockNowAcknowledged() {
-        Log.i(TAG, "Lock Now acknowledged — clearing session authorization")
-        _sessionAuthorized.value = false
-        wasAutoAttempt = false
-        pendingPassphrase = null
-        _state.value = LockdownState.LockNowAcknowledged
-    }
-
-    private fun handleLocked() {
+    private fun handleLocked(reason: String) {
+        // Firmware emits a LOCKED status as the Lock-Now ack right before reboot.
+        if (pendingLockNow) {
+            pendingLockNow = false
+            _sessionAuthorized.value = false
+            _state.value = LockdownState.LockNowAcknowledged
+            return
+        }
         val address = sender.getDeviceAddress()
         if (address != null) {
             val stored = passphraseStore.getPassphrase(address)
             if (stored != null) {
-                Log.i(TAG, "Auto-replaying cached passphrase for $address")
+                Log.i(TAG, "Auto-replaying cached passphrase for $address (reason=$reason)")
                 wasAutoAttempt = true
                 pendingPassphrase = stored.passphrase
                 pendingBoots = stored.boots
@@ -107,10 +122,10 @@ class LockdownCoordinator(
                 return
             }
         }
-        _state.value = LockdownState.Locked
+        _state.value = LockdownState.Locked(reason)
     }
 
-    private fun handleUnlocked(message: String) {
+    private fun handleUnlocked(status: GeneratedMeshProtos.LockdownStatus) {
         val address = sender.getDeviceAddress()
         val passphrase = pendingPassphrase
         if (address != null && passphrase != null) {
@@ -119,49 +134,37 @@ class LockdownCoordinator(
         }
         pendingPassphrase = null
         wasAutoAttempt = false
-        _tokenInfo.value = parseTokenInfo(message)
         _sessionAuthorized.value = true
-        _state.value = LockdownState.Unlocked
+        _state.value = LockdownState.Unlocked(
+            bootsRemaining = status.bootsRemaining,
+            validUntilEpoch = status.validUntilEpoch.toLong() and 0xFFFFFFFFL,
+        )
     }
 
-    private fun handleUnlockFailed(message: String) {
-        val backoffSeconds = message.split(":").firstNotNullOfOrNull { seg ->
-            if (seg.startsWith("backoff=")) seg.removePrefix("backoff=").toIntOrNull() else null
-        }
+    private fun handleUnlockFailed(backoffSeconds: Int) {
         val wasAuto = wasAutoAttempt
         wasAutoAttempt = false
         pendingPassphrase = null
         if (wasAuto) {
-            if (backoffSeconds != null && backoffSeconds > 0) {
+            if (backoffSeconds > 0) {
                 Log.i(TAG, "Auto-unlock rate-limited (backoff=${backoffSeconds}s)")
                 _state.value = LockdownState.UnlockBackoff(backoffSeconds)
             } else {
+                // Assume the cached passphrase was rotated server-side.
                 sender.getDeviceAddress()?.let { passphraseStore.clearPassphrase(it) }
-                Log.i(TAG, "Auto-unlock failed (wrong passphrase), cleared cached passphrase")
-                _state.value = LockdownState.Locked
+                Log.i(TAG, "Auto-unlock failed (wrong passphrase); cleared cached passphrase")
+                _state.value = LockdownState.Locked("auto_replay_wrong_passphrase")
             }
             return
         }
-        if (backoffSeconds != null && backoffSeconds > 0) {
-            _state.value = LockdownState.UnlockBackoff(backoffSeconds)
+        _state.value = if (backoffSeconds > 0) {
+            LockdownState.UnlockBackoff(backoffSeconds)
         } else {
-            _state.value = LockdownState.UnlockFailed
+            LockdownState.UnlockFailed
         }
     }
 
-    private fun parseTokenInfo(message: String): LockdownTokenInfo? {
-        var boots = -1
-        var until = 0L
-        for (segment in message.split(":")) {
-            when {
-                segment.startsWith("boots=") -> boots = segment.removePrefix("boots=").toIntOrNull() ?: -1
-                segment.startsWith("until=") -> until = segment.removePrefix("until=").toLongOrNull() ?: 0L
-            }
-        }
-        return if (boots >= 0) LockdownTokenInfo(boots, until) else null
-    }
-
-    /** User-initiated passphrase submission. */
+    /** User-initiated passphrase submission (provision or unlock). */
     fun submitPassphrase(passphrase: String, boots: Int, hours: Int) {
         pendingPassphrase = passphrase
         pendingBoots = boots
@@ -173,26 +176,16 @@ class LockdownCoordinator(
 
     /** User-initiated Lock Now. */
     fun lockNow() {
+        pendingLockNow = true
         sender.sendLockNow()
     }
 
-    /** Forget the cached passphrase for the current (or given) device. */
+    /** Drop any cached passphrase for the current device. */
     fun forgetCachedPassphrase(address: String? = sender.getDeviceAddress()) {
         address?.let { passphraseStore.clearPassphrase(it) }
     }
 
     companion object {
         private const val TAG = "LockdownCoordinator"
-
-        // Wire-format string prefixes from firmware PR #10349. The firmware-side migration to
-        // structured LockdownStatus (protobufs PR #911) is a follow-up; when that lands we can
-        // add a second observer path here that consumes LockdownStatus and feeds the same state.
-        private const val LOCKDOWN_NEEDS_PROVISION = "LOCKDOWN_NEEDS_PROVISION"
-        private const val LOCKDOWN_LOCKED_ACK = "LOCKDOWN_LOCKED" // exact match: Lock Now ACK
-        private const val LOCKDOWN_LOCKED_WITH_REASON_PREFIX = "LOCKDOWN_LOCKED:"
-        private const val LOCKDOWN_UNLOCKED_PREFIX = "LOCKDOWN_UNLOCKED"
-        private const val LOCKDOWN_UNLOCK_FAILED_PREFIX = "LOCKDOWN_UNLOCK_FAILED"
-
-        const val PREFIX = "LOCKDOWN_"
     }
 }

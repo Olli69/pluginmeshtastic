@@ -25,7 +25,6 @@ import com.atakmap.android.dropdown.DropDownReceiver;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.pluginmeshtastic.meshtastic.AtakMeshtasticBridge;
 import com.atakmap.android.pluginmeshtastic.meshtastic.LockdownState;
-import com.atakmap.android.pluginmeshtastic.meshtastic.LockdownTokenInfo;
 import com.atakmap.android.pluginmeshtastic.meshtastic.MeshtasticBleScanner;
 import com.atakmap.android.pluginmeshtastic.meshtastic.MeshtasticManager;
 import android.text.InputType;
@@ -162,18 +161,20 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         if (lockNowButton != null) {
             lockNowButton.setOnClickListener(v -> confirmAndLockNow());
         }
-        meshtasticBridge.setLockdownListener((state, token) -> uiHandler.post(() -> onLockdownState(state, token)));
+        meshtasticBridge.setLockdownListener(state -> uiHandler.post(() -> onLockdownState(state)));
     }
 
-    private void onLockdownState(LockdownState state, LockdownTokenInfo token) {
+    private void onLockdownState(LockdownState state) {
         currentLockdownState = state;
         if (lockdownStatusText != null) {
-            lockdownStatusText.setText(formatLockdownStatus(state, token));
+            lockdownStatusText.setText(formatLockdownStatus(state));
         }
         if (state instanceof LockdownState.NeedsProvision) {
             dismissBackoffDialog();
             showPassphraseDialog(true);
         } else if (state instanceof LockdownState.Locked) {
+            // Locked with any reason — auto-replay happens in the coordinator before we get
+            // here, so reaching this state means we need to prompt.
             dismissBackoffDialog();
             showPassphraseDialog(false);
         } else if (state instanceof LockdownState.UnlockFailed) {
@@ -196,20 +197,21 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         }
     }
 
-    private String formatLockdownStatus(LockdownState state, LockdownTokenInfo token) {
+    private String formatLockdownStatus(LockdownState state) {
         if (state instanceof LockdownState.None) return "Status: not locked";
         if (state instanceof LockdownState.NeedsProvision) return "Status: needs passphrase setup";
-        if (state instanceof LockdownState.Locked) return "Status: locked";
+        if (state instanceof LockdownState.Locked) {
+            String reason = ((LockdownState.Locked) state).getReason();
+            return reason.isEmpty() ? "Status: locked" : ("Status: locked (" + reason + ")");
+        }
         if (state instanceof LockdownState.UnlockFailed) return "Status: wrong passphrase";
         if (state instanceof LockdownState.UnlockBackoff) {
             return "Status: rate-limited (" + ((LockdownState.UnlockBackoff) state).getBackoffSeconds() + "s)";
         }
         if (state instanceof LockdownState.Unlocked) {
-            if (token != null) {
-                String exp = token.getExpiryEpoch() > 0 ? (", until=" + token.getExpiryEpoch()) : "";
-                return "Status: unlocked (boots=" + token.getBootsRemaining() + exp + ")";
-            }
-            return "Status: unlocked";
+            LockdownState.Unlocked u = (LockdownState.Unlocked) state;
+            String exp = u.getValidUntilEpoch() > 0 ? (", until=" + u.getValidUntilEpoch()) : "";
+            return "Status: unlocked (boots=" + u.getBootsRemaining() + exp + ")";
         }
         if (state instanceof LockdownState.LockNowAcknowledged) return "Status: locking…";
         return "Status: unknown";
@@ -1340,6 +1342,18 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         });
     }
     
+    /**
+     * Called by the bridge whenever a Config response is parsed and cached. The
+     * Device-Information card reads from cached config; this push lets it re-render
+     * after a post-reboot reconnect without the user toggling Disconnect/Connect.
+     */
+    public void onConfigUpdated() {
+        uiHandler.post(() -> {
+            updateConnectionStatus();
+            updateDeviceInfoForced();
+        });
+    }
+
     /**
      * Called when device name is updated (e.g., when NodeInfo is received)
      * This refreshes the UI to show the updated device name

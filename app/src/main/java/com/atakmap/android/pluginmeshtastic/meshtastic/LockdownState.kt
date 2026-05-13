@@ -1,41 +1,40 @@
 package com.atakmap.android.pluginmeshtastic.meshtastic
 
 /**
- * Represents the lockdown authentication state for a hardened Meshtastic device.
+ * Lockdown authentication state for a MESHTASTIC_LOCKDOWN-hardened device.
  *
- * Mirrors the public surface from the Meshtastic-Android reference implementation
- * (org.meshtastic.core.model.service.LockdownState) so the UI can drive the same flows.
+ * Driven by FromRadio.lockdown_status (typed proto wire format from
+ * meshtastic/protobufs PR #911). The UI subscribes to a flow of these.
  */
 sealed class LockdownState {
-    /** No lockdown signal received (default for non-hardened devices). */
+    /** No lockdown signal received yet (default for non-hardened firmware). */
     object None : LockdownState()
 
-    /** Device is locked and this connection has not been authorized yet. */
-    object Locked : LockdownState()
-
-    /** First-boot device with no passphrase set yet — prompt user to pick one. */
+    /** First-boot device with no passphrase set — prompt operator to pick one. */
     object NeedsProvision : LockdownState()
 
-    /** Session is authorized; optional token metadata in [LockdownCoordinator.tokenInfo]. */
-    object Unlocked : LockdownState()
+    /**
+     * Storage is locked or this connection hasn't authed yet.
+     * [reason] is the firmware-supplied `lock_reason` string (machine-readable);
+     * unknown reasons are still treated as Locked.
+     */
+    data class Locked(val reason: String) : LockdownState()
 
-    /** Lock Now ACK received — caller should drop the BLE connection. */
-    object LockNowAcknowledged : LockdownState()
+    /**
+     * Session authorized. [bootsRemaining] and [validUntilEpoch] mirror the firmware's
+     * session token TTL (epoch=0 means no wall-clock expiry).
+     */
+    data class Unlocked(val bootsRemaining: Int, val validUntilEpoch: Long) : LockdownState()
 
-    /** Wrong passphrase — retry immediately. */
+    /** Wrong passphrase, no rate-limit — retry allowed immediately. */
     object UnlockFailed : LockdownState()
 
-    /** Too many failed attempts — caller must wait [backoffSeconds] before retrying. */
+    /** Rate-limited — caller must wait [backoffSeconds] before retrying. */
     data class UnlockBackoff(val backoffSeconds: Int) : LockdownState()
-}
 
-/**
- * Parsed metadata from a LOCKDOWN_UNLOCKED:boots=N:until=EPOCH notification.
- *
- * @param bootsRemaining reboots before the token expires.
- * @param expiryEpoch unix epoch seconds; 0 = no wall-clock expiry.
- */
-data class LockdownTokenInfo(
-    val bootsRemaining: Int,
-    val expiryEpoch: Long,
-)
+    /**
+     * Synthetic state — set when the coordinator's pending Lock Now flag is resolved
+     * by the next inbound LOCKED status (or a connection drop). UI should disconnect.
+     */
+    object LockNowAcknowledged : LockdownState()
+}

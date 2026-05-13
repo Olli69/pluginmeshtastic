@@ -930,12 +930,20 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     
     // Callback for device name updates
     private var deviceNameUpdateCallback: ((String) -> Unit)? = null
-    
+
     /**
      * Set callback for when device name is updated
      */
     fun setDeviceNameUpdateCallback(callback: (String) -> Unit) {
         deviceNameUpdateCallback = callback
+    }
+
+    // Callback fired whenever a Config response is received and cached. UI uses it to
+    // re-render fields like region/role after the device reboots post-reconfigure.
+    private var configUpdateCallback: (() -> Unit)? = null
+
+    fun setConfigUpdateCallback(callback: (() -> Unit)?) {
+        configUpdateCallback = callback
     }
     
     /**
@@ -1055,6 +1063,8 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
                     Log.w(TAG, "❓ Unknown Config type received")
                 }
             }
+            // Poke the UI so cards reading getLoraConfig() / role / region pick up the new value.
+            configUpdateCallback?.invoke()
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing Config: ${e.message}", e)
         }
@@ -1373,13 +1383,8 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
                 Log.d(TAG, "Device log: ${fromRadio.logRecord}")
             }
 
-            fromRadio.clientNotification != null -> {
-                val cn = fromRadio.clientNotification
-                if (cn.message.startsWith(LockdownCoordinator.PREFIX)) {
-                    lockdownCoordinator.handleLockdownNotification(cn.message)
-                } else {
-                    Log.i(TAG, "ClientNotification: ${cn.message}")
-                }
+            fromRadio.lockdownStatus != null -> {
+                lockdownCoordinator.handleLockdownStatus(fromRadio.lockdownStatus)
             }
             
             fromRadio.routingError != null -> {
@@ -1631,13 +1636,11 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     
     // --- Lockdown wire format -------------------------------------------------------------
     //
-    // Send a `set_config(security)`-shaped AdminMessage that the locked firmware decodes as
-    // a passphrase submission. This is the string-prefix wire format from firmware PR #10349;
-    // protobufs PR #911 adds a structured AdminMessage.lockdown_auth field but the firmware
-    // still emits/consumes the SecurityConfig form, so that's what we target here.
+    // Outbound: AdminMessage.lockdown_auth (oneof tag 104) — typed schema from
+    // meshtastic/protobufs PR #911. Inbound: FromRadio.lockdown_status (oneof tag 18).
     //
-    // CRITICAL: every field below has to match exactly — the firmware ToRadio gate while
-    // locked is strict.
+    // CRITICAL: every MeshPacket field below has to match exactly — the firmware ToRadio
+    // gate while locked is strict.
     //   - to == myNodeNum                      (firmware checks this)
     //   - from == 0 (proto default, NOT SET)   (firmware uses from==0 as "local PhoneAPI")
     //   - portnum == ADMIN_APP
@@ -1650,28 +1653,20 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
             Log.w(TAG, "Cannot send lockdown passphrase: myNodeInfo not yet received")
             return
         }
-        val adminKeyList: List<ByteString> = if (boots > 0 || hours > 0) {
-            val untilEpoch = if (hours > 0) System.currentTimeMillis() / 1000L + hours.toLong() * 3600L else 0L
-            val untilBytes = ByteArray(4).apply {
-                this[0] = (untilEpoch and 0xFF).toByte()
-                this[1] = ((untilEpoch shr 8) and 0xFF).toByte()
-                this[2] = ((untilEpoch shr 16) and 0xFF).toByte()
-                this[3] = ((untilEpoch shr 24) and 0xFF).toByte()
-            }
-            listOf(
-                ByteString.EMPTY,
-                ByteString.copyFrom(byteArrayOf(boots.coerceIn(1, 255).toByte())),
-                ByteString.copyFrom(untilBytes),
-            )
+        val validUntilEpoch: Int = if (hours > 0) {
+            // Absolute Unix-epoch seconds; firmware compares with its RTC.
+            ((System.currentTimeMillis() / 1000L) + hours.toLong() * 3600L).toInt()
         } else {
-            emptyList()
+            0
         }
-        val securityConfig = ConfigProtos.Config.SecurityConfig.newBuilder()
-            .setPrivateKey(ByteString.copyFrom(passphrase.toByteArray(Charsets.UTF_8)))
-            .also { b -> adminKeyList.forEach { b.addAdminKey(it) } }
+        val lockdownAuth = AdminProtos.LockdownAuth.newBuilder()
+            .setPassphrase(ByteString.copyFrom(passphrase.toByteArray(Charsets.UTF_8)))
+            .setBootsRemaining(boots.coerceAtLeast(0))
+            .setValidUntilEpoch(validUntilEpoch)
+            .setLockNow(false)
             .build()
         val adminMsg = AdminProtos.AdminMessage.newBuilder()
-            .setSetConfig(ConfigProtos.Config.newBuilder().setSecurity(securityConfig).build())
+            .setLockdownAuth(lockdownAuth)
             .build()
         sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "passphrase")
     }
@@ -1682,12 +1677,11 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
             Log.w(TAG, "Cannot send Lock Now: myNodeInfo not yet received")
             return
         }
-        // Sentinel: SecurityConfig.private_key = single 0xFF byte → firmware treats as Lock Now.
-        val securityConfig = ConfigProtos.Config.SecurityConfig.newBuilder()
-            .setPrivateKey(ByteString.copyFrom(byteArrayOf(0xFF.toByte())))
+        val lockdownAuth = AdminProtos.LockdownAuth.newBuilder()
+            .setLockNow(true)
             .build()
         val adminMsg = AdminProtos.AdminMessage.newBuilder()
-            .setSetConfig(ConfigProtos.Config.newBuilder().setSecurity(securityConfig).build())
+            .setLockdownAuth(lockdownAuth)
             .build()
         sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "lock-now")
     }

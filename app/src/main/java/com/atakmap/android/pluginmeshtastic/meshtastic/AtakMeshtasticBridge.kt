@@ -176,6 +176,11 @@ class AtakMeshtasticBridge(
             Log.i(TAG, "NodeInfo callback triggered with longName: '$longName'")
             updateStoredDeviceName(longName)
         }
+
+        // Poke the UI whenever a Config response is cached (region, role, etc.).
+        meshtasticManager?.setConfigUpdateCallback {
+            notifyConfigUpdated()
+        }
         
         // Auto-connect if configured
         if (autoConnectBluetooth && bluetoothAddress != null) {
@@ -232,6 +237,20 @@ class AtakMeshtasticBridge(
         }
     }
     
+    /** Notify the DropDownReceiver that fresh Config data was cached. */
+    private fun notifyConfigUpdated() {
+        dropDownReceiver?.let { receiver ->
+            try {
+                val method = receiver::class.java.getMethod("onConfigUpdated")
+                method.invoke(receiver)
+            } catch (_: NoSuchMethodException) {
+                // Receiver doesn't care — silently skip.
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to notify DropDownReceiver of config update", e)
+            }
+        }
+    }
+
     /**
      * Notify the DropDownReceiver that the device name has been updated
      */
@@ -441,9 +460,9 @@ class AtakMeshtasticBridge(
         meshtasticManager?.lockdownCoordinator?.lockNow()
     }
 
-    /** Java-friendly listener to react to lockdown state changes (delivered on the main thread). */
+    /** Java-friendly listener for lockdown state changes (delivered on the main thread). */
     interface LockdownListener {
-        fun onLockdownState(state: LockdownState, tokenInfo: LockdownTokenInfo?)
+        fun onLockdownState(state: LockdownState)
     }
 
     private var lockdownListenerJob: Job? = null
@@ -460,14 +479,13 @@ class AtakMeshtasticBridge(
         val listener = pendingLockdownListener ?: return
         val coord = meshtasticManager?.lockdownCoordinator ?: return // will retry after init
         lockdownListenerJob = scope.launch {
-            kotlinx.coroutines.flow.combine(coord.state, coord.tokenInfo) { s, t -> s to t }
-                .collect { (state, token) ->
-                    try {
-                        listener.onLockdownState(state, token)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Lockdown listener threw", e)
-                    }
+            coord.state.collect { state ->
+                try {
+                    listener.onLockdownState(state)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Lockdown listener threw", e)
                 }
+            }
         }
     }
     
