@@ -24,8 +24,12 @@ import com.atakmap.android.dropdown.DropDown;
 import com.atakmap.android.dropdown.DropDownReceiver;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.pluginmeshtastic.meshtastic.AtakMeshtasticBridge;
+import com.atakmap.android.pluginmeshtastic.meshtastic.LockdownState;
+import com.atakmap.android.pluginmeshtastic.meshtastic.LockdownTokenInfo;
 import com.atakmap.android.pluginmeshtastic.meshtastic.MeshtasticBleScanner;
 import com.atakmap.android.pluginmeshtastic.meshtastic.MeshtasticManager;
+import android.text.InputType;
+import android.widget.LinearLayout;
 import com.atakmap.android.pluginmeshtastic.plugin.R;
 import com.atakmap.coremap.log.Log;
 
@@ -118,6 +122,14 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
     private long lastRssiRequest = 0;
     private static final long RSSI_REQUEST_INTERVAL_MS = 5000; // Request RSSI every 5 seconds
 
+    // Lockdown UI state
+    private AlertDialog passphraseDialog;
+    private AlertDialog backoffDialog;
+    private Runnable backoffTickRunnable;
+    private TextView lockdownStatusText;
+    private Button lockNowButton;
+    private LockdownState currentLockdownState = LockdownState.None.INSTANCE;
+
     public MeshtasticDropDownReceiver(MapView mapView, Context context, AtakMeshtasticBridge bridge) {
         super(mapView);
         this.pluginContext = context;
@@ -139,6 +151,181 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
 
         // Start observing scan results immediately to support autoconnect
         observeScanResults();
+
+        // Wire the lockdown UI (passphrase dialog, Lock Now button, status text).
+        initializeLockdownUi();
+    }
+
+    private void initializeLockdownUi() {
+        lockdownStatusText = templateView.findViewById(R.id.lockdown_status_text);
+        lockNowButton = templateView.findViewById(R.id.btn_lock_now);
+        if (lockNowButton != null) {
+            lockNowButton.setOnClickListener(v -> confirmAndLockNow());
+        }
+        meshtasticBridge.setLockdownListener((state, token) -> uiHandler.post(() -> onLockdownState(state, token)));
+    }
+
+    private void onLockdownState(LockdownState state, LockdownTokenInfo token) {
+        currentLockdownState = state;
+        if (lockdownStatusText != null) {
+            lockdownStatusText.setText(formatLockdownStatus(state, token));
+        }
+        if (state instanceof LockdownState.NeedsProvision) {
+            dismissBackoffDialog();
+            showPassphraseDialog(true);
+        } else if (state instanceof LockdownState.Locked) {
+            dismissBackoffDialog();
+            showPassphraseDialog(false);
+        } else if (state instanceof LockdownState.UnlockFailed) {
+            dismissBackoffDialog();
+            Toast.makeText(getMapView().getContext(), "Wrong passphrase", Toast.LENGTH_SHORT).show();
+            showPassphraseDialog(false);
+        } else if (state instanceof LockdownState.UnlockBackoff) {
+            dismissPassphraseDialog();
+            int seconds = ((LockdownState.UnlockBackoff) state).getBackoffSeconds();
+            showBackoffDialog(seconds);
+        } else if (state instanceof LockdownState.Unlocked) {
+            dismissPassphraseDialog();
+            dismissBackoffDialog();
+            Toast.makeText(getMapView().getContext(), "Device unlocked", Toast.LENGTH_SHORT).show();
+        } else if (state instanceof LockdownState.LockNowAcknowledged) {
+            dismissPassphraseDialog();
+            dismissBackoffDialog();
+            Toast.makeText(getMapView().getContext(), "Device locked — disconnecting", Toast.LENGTH_SHORT).show();
+            meshtasticBridge.disconnect();
+        }
+    }
+
+    private String formatLockdownStatus(LockdownState state, LockdownTokenInfo token) {
+        if (state instanceof LockdownState.None) return "Status: not locked";
+        if (state instanceof LockdownState.NeedsProvision) return "Status: needs passphrase setup";
+        if (state instanceof LockdownState.Locked) return "Status: locked";
+        if (state instanceof LockdownState.UnlockFailed) return "Status: wrong passphrase";
+        if (state instanceof LockdownState.UnlockBackoff) {
+            return "Status: rate-limited (" + ((LockdownState.UnlockBackoff) state).getBackoffSeconds() + "s)";
+        }
+        if (state instanceof LockdownState.Unlocked) {
+            if (token != null) {
+                String exp = token.getExpiryEpoch() > 0 ? (", until=" + token.getExpiryEpoch()) : "";
+                return "Status: unlocked (boots=" + token.getBootsRemaining() + exp + ")";
+            }
+            return "Status: unlocked";
+        }
+        if (state instanceof LockdownState.LockNowAcknowledged) return "Status: locking…";
+        return "Status: unknown";
+    }
+
+    private void showPassphraseDialog(boolean firstTime) {
+        if (passphraseDialog != null && passphraseDialog.isShowing()) return;
+        Context dlgCtx = getMapView().getContext();
+        LinearLayout container = new LinearLayout(dlgCtx);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (16 * dlgCtx.getResources().getDisplayMetrics().density);
+        container.setPadding(pad, pad, pad, pad);
+
+        if (firstTime) {
+            TextView hint = new TextView(dlgCtx);
+            hint.setText("First-time setup — pick a passphrase you can re-enter.");
+            container.addView(hint);
+        }
+
+        final EditText passField = new EditText(dlgCtx);
+        passField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passField.setHint("Passphrase (1–32 chars)");
+        container.addView(passField);
+
+        TextView bootsLabel = new TextView(dlgCtx);
+        bootsLabel.setText("Boots remaining (0 = firmware default)");
+        container.addView(bootsLabel);
+        final EditText bootsField = new EditText(dlgCtx);
+        bootsField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        bootsField.setText("0");
+        container.addView(bootsField);
+
+        TextView hoursLabel = new TextView(dlgCtx);
+        hoursLabel.setText("Hours valid (0 = no time limit)");
+        container.addView(hoursLabel);
+        final EditText hoursField = new EditText(dlgCtx);
+        hoursField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        hoursField.setText("0");
+        container.addView(hoursField);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(dlgCtx);
+        b.setTitle(firstTime ? "Set device passphrase" : "Unlock device");
+        b.setView(container);
+        b.setPositiveButton(firstTime ? "Set" : "Unlock", (d, w) -> {
+            String pass = passField.getText().toString();
+            if (pass.isEmpty() || pass.length() > 32) {
+                Toast.makeText(dlgCtx, "Passphrase must be 1–32 bytes", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int boots = parseIntOrZero(bootsField.getText().toString());
+            int hours = parseIntOrZero(hoursField.getText().toString());
+            meshtasticBridge.submitLockdownPassphrase(pass, boots, hours);
+        });
+        b.setNegativeButton("Cancel", null);
+        b.setCancelable(false);
+        passphraseDialog = b.create();
+        passphraseDialog.show();
+    }
+
+    private void showBackoffDialog(int initialSeconds) {
+        dismissBackoffDialog();
+        Context dlgCtx = getMapView().getContext();
+        AlertDialog.Builder b = new AlertDialog.Builder(dlgCtx);
+        b.setTitle("Rate-limited");
+        b.setCancelable(false);
+        b.setNegativeButton("Cancel", null);
+        backoffDialog = b.create();
+        backoffDialog.setMessage("Too many attempts — retry in " + initialSeconds + "s");
+        backoffDialog.show();
+
+        final int[] remaining = { initialSeconds };
+        backoffTickRunnable = new Runnable() {
+            @Override public void run() {
+                remaining[0] -= 1;
+                if (remaining[0] <= 0) {
+                    dismissBackoffDialog();
+                    // Re-prompt for passphrase once the backoff has elapsed; the firmware will
+                    // tell us again via LOCKDOWN_LOCKED if it's still locked.
+                    if (currentLockdownState instanceof LockdownState.UnlockBackoff) {
+                        showPassphraseDialog(false);
+                    }
+                    return;
+                }
+                if (backoffDialog != null && backoffDialog.isShowing()) {
+                    backoffDialog.setMessage("Too many attempts — retry in " + remaining[0] + "s");
+                }
+                uiHandler.postDelayed(this, 1000);
+            }
+        };
+        uiHandler.postDelayed(backoffTickRunnable, 1000);
+    }
+
+    private void dismissPassphraseDialog() {
+        if (passphraseDialog != null && passphraseDialog.isShowing()) passphraseDialog.dismiss();
+        passphraseDialog = null;
+    }
+
+    private void dismissBackoffDialog() {
+        if (backoffTickRunnable != null) uiHandler.removeCallbacks(backoffTickRunnable);
+        backoffTickRunnable = null;
+        if (backoffDialog != null && backoffDialog.isShowing()) backoffDialog.dismiss();
+        backoffDialog = null;
+    }
+
+    private void confirmAndLockNow() {
+        Context dlgCtx = getMapView().getContext();
+        new AlertDialog.Builder(dlgCtx)
+                .setTitle("Lock device now?")
+                .setMessage("This revokes the current session and reboots the device locked. You will need the passphrase to reconnect.")
+                .setPositiveButton("Lock", (d, w) -> meshtasticBridge.lockNow())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private static int parseIntOrZero(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
     }
 
     private void initializeUI() {
@@ -1088,6 +1275,11 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         if (bleScanner != null) {
             bleScanner.cleanup();
         }
+        if (meshtasticBridge != null) {
+            meshtasticBridge.setLockdownListener(null);
+        }
+        dismissPassphraseDialog();
+        dismissBackoffDialog();
     }
 
     @Override

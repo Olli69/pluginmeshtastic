@@ -311,6 +311,9 @@ dependencies {
     implementation 'androidx.core:core:1.15.0'
     implementation 'androidx.lifecycle:lifecycle-service:2.8.7'
 
+    // EncryptedSharedPreferences for the lockdown passphrase cache
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
     // EXI library for XML processing
     implementation 'com.siemens.ct.exi:exificient:1.0.7'
 

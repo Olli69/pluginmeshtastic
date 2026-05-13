@@ -28,7 +28,7 @@ interface RadioCallback {
 
 class BluetoothInterface(
     private val context: Context,
-    private val deviceAddress: String,
+    val deviceAddress: String,
     private val callback: RadioCallback
 ) {
     companion object {

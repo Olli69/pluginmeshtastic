@@ -175,6 +175,17 @@ object MeshProtos {
     )
     
     /**
+     * Lightweight wrapper around the ClientNotification proto. Carries only the fields the
+     * plugin actually inspects (the lockdown dispatcher just needs `message`).
+     */
+    data class ClientNotificationData(
+        val message: String,
+        val replyId: Int = 0,
+        val time: Int = 0,
+        val level: Int = 0,
+    )
+
+    /**
      * Message received from radio
      */
     data class FromRadio(
@@ -189,7 +200,8 @@ object MeshProtos {
         val metadata: com.geeksville.mesh.MeshProtos.DeviceMetadata? = null,
         val config: com.geeksville.mesh.ConfigProtos.Config? = null,
         val moduleConfig: com.geeksville.mesh.ModuleConfigProtos.ModuleConfig? = null,
-        val channel: com.geeksville.mesh.ChannelProtos.Channel? = null
+        val channel: com.geeksville.mesh.ChannelProtos.Channel? = null,
+        val clientNotification: ClientNotificationData? = null
     ) {
         companion object {
             fun parseFrom(data: ByteArray): FromRadio? {
@@ -329,7 +341,19 @@ object MeshProtos {
                         protoFromRadio.hasChannel() -> {
                             FromRadio(channel = protoFromRadio.channel)
                         }
-                        
+
+                        protoFromRadio.hasClientNotification() -> {
+                            val cn = protoFromRadio.clientNotification
+                            FromRadio(
+                                clientNotification = ClientNotificationData(
+                                    message = cn.message ?: "",
+                                    replyId = cn.replyId,
+                                    time = cn.time,
+                                    level = cn.levelValue
+                                )
+                            )
+                        }
+
                         else -> {
                             // Unknown or unhandled message type
                             null

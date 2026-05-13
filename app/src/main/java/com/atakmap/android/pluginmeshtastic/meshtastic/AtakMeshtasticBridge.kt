@@ -167,6 +167,9 @@ class AtakMeshtasticBridge(
         // Create and initialize the manager
         meshtasticManager = MeshtasticManager(mapViewContext)
         meshtasticManager?.registerAtakMessageHandler(this)
+
+        // Attach any lockdown listener that was registered before the manager existed.
+        attachLockdownListener()
         
         // Set up callback to update device name when NodeInfo is received
         meshtasticManager?.setDeviceNameUpdateCallback { longName ->
@@ -425,6 +428,47 @@ class AtakMeshtasticBridge(
         autoConnectBluetooth = false
         autoConnectUsb = false
         meshtasticManager?.disconnect()
+    }
+
+    /** Lockdown coordinator surface for the UI (state flow + actions). */
+    fun getLockdownCoordinator(): LockdownCoordinator? = meshtasticManager?.lockdownCoordinator
+
+    fun submitLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
+        meshtasticManager?.lockdownCoordinator?.submitPassphrase(passphrase, boots, hours)
+    }
+
+    fun lockNow() {
+        meshtasticManager?.lockdownCoordinator?.lockNow()
+    }
+
+    /** Java-friendly listener to react to lockdown state changes (delivered on the main thread). */
+    interface LockdownListener {
+        fun onLockdownState(state: LockdownState, tokenInfo: LockdownTokenInfo?)
+    }
+
+    private var lockdownListenerJob: Job? = null
+    private var pendingLockdownListener: LockdownListener? = null
+
+    fun setLockdownListener(listener: LockdownListener?) {
+        pendingLockdownListener = listener
+        attachLockdownListener()
+    }
+
+    private fun attachLockdownListener() {
+        lockdownListenerJob?.cancel()
+        lockdownListenerJob = null
+        val listener = pendingLockdownListener ?: return
+        val coord = meshtasticManager?.lockdownCoordinator ?: return // will retry after init
+        lockdownListenerJob = scope.launch {
+            kotlinx.coroutines.flow.combine(coord.state, coord.tokenInfo) { s, t -> s to t }
+                .collect { (state, token) ->
+                    try {
+                        listener.onLockdownState(state, token)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Lockdown listener threw", e)
+                    }
+                }
+        }
     }
     
     /**
