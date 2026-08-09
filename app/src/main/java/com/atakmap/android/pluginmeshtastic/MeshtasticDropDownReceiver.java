@@ -10,15 +10,22 @@ import com.atakmap.android.ipc.AtakBroadcast.DocumentedIntentFilter;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.ProgressBar;
+import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TabHost;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.geeksville.mesh.ChannelProtos;
+import com.geeksville.mesh.ConfigProtos;
+import com.atakmap.android.pluginmeshtastic.meshtastic.MeshProtos;
 
 import com.atakmap.android.dropdown.DropDown;
 import com.atakmap.android.dropdown.DropDownReceiver;
@@ -74,6 +81,38 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
     // Settings tab elements
     private EditText channelPasswordField;
     private Button savePasswordButton;
+
+    // Device-configuration UI (Settings tab) - read from device, pushed via "Apply to device"
+    private Spinner spinnerRegion, spinnerModemPreset, spinnerRole, spinnerRebroadcastMode,
+            spinnerGpsMode, spinnerPairingMode, spinnerDisplayMode;
+    private Switch switchUsePreset, switchTxEnabled, switchIgnoreMqtt, switchOverrideDutyCycle,
+            switchPositionSmart, switchFixedPosition, switchPowerSaving, switchBtEnabled,
+            switchWakeOnTap, switchFlipScreen, switchWifiEnabled, switchEthEnabled,
+            switchUplink, switchDownlink;
+    private EditText editHopLimit, editNodeInfoBroadcastSecs, editPositionBroadcastSecs,
+            editGpsUpdateInterval, editOnBatteryShutdown, editLsSecs, editMinWakeSecs,
+            editFixedPin, editScreenOnSecs, editChannelName;
+    private Button applyConfigButton, reloadConfigButton;
+    private TextView configApplyStatus;
+    private TextView settingsFirmwareInfo;
+
+    // Backing enum value lists (parallel to each spinner's displayed names, UNRECOGNIZED removed)
+    private List<ConfigProtos.Config.LoRaConfig.RegionCode> regionValues;
+    private List<ConfigProtos.Config.LoRaConfig.ModemPreset> modemPresetValues;
+    private List<ConfigProtos.Config.DeviceConfig.Role> roleValues;
+    private List<ConfigProtos.Config.DeviceConfig.RebroadcastMode> rebroadcastValues;
+    private List<ConfigProtos.Config.PositionConfig.GpsMode> gpsModeValues;
+    private List<ConfigProtos.Config.BluetoothConfig.PairingMode> pairingModeValues;
+    private List<ConfigProtos.Config.DisplayConfig.DisplayMode> displayModeValues;
+
+    // Populate the config fields from the device only once per connection so we don't clobber
+    // edits the user is making; "Reload from device" forces a refresh.
+    private boolean settingsPopulated = false;
+
+    // Mesh tab (node roster)
+    private ListView meshNodeList;
+    private TextView meshSummary;
+    private MeshNodeAdapter meshAdapter;
     
     // Device metadata elements
     private View deviceMetadataCard;
@@ -127,6 +166,8 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
     private Runnable backoffTickRunnable;
     private TextView lockdownStatusText;
     private Button lockNowButton;
+    private Button enableLockdownButton;
+    private Button disableLockdownButton;
     private LockdownState currentLockdownState = LockdownState.None.INSTANCE;
 
     public MeshtasticDropDownReceiver(MapView mapView, Context context, AtakMeshtasticBridge bridge) {
@@ -158,10 +199,39 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
     private void initializeLockdownUi() {
         lockdownStatusText = templateView.findViewById(R.id.lockdown_status_text);
         lockNowButton = templateView.findViewById(R.id.btn_lock_now);
+        enableLockdownButton = templateView.findViewById(R.id.btn_enable_lockdown);
+        disableLockdownButton = templateView.findViewById(R.id.btn_disable_lockdown);
         if (lockNowButton != null) {
             lockNowButton.setOnClickListener(v -> confirmAndLockNow());
         }
+        if (enableLockdownButton != null) {
+            enableLockdownButton.setOnClickListener(v -> confirmAndEnableLockdown());
+        }
+        if (disableLockdownButton != null) {
+            disableLockdownButton.setOnClickListener(v -> confirmAndDisableLockdown());
+        }
+        updateLockdownButtons(currentLockdownState);
         meshtasticBridge.setLockdownListener(state -> uiHandler.post(() -> onLockdownState(state)));
+    }
+
+    /**
+     * Lockdown is now a client-toggleable mode, so which actions are valid depends on state:
+     * Enable only when the device reports DISABLED (capable but off); Disable / Lock Now only
+     * when this connection is Unlocked. Everything else (locked, provisioning, no signal) hides
+     * them — those flows drive their own dialogs.
+     */
+    private void updateLockdownButtons(LockdownState state) {
+        boolean disabled = state instanceof LockdownState.Disabled;
+        boolean unlocked = state instanceof LockdownState.Unlocked;
+        if (enableLockdownButton != null) {
+            enableLockdownButton.setVisibility(disabled ? View.VISIBLE : View.GONE);
+        }
+        if (disableLockdownButton != null) {
+            disableLockdownButton.setVisibility(unlocked ? View.VISIBLE : View.GONE);
+        }
+        if (lockNowButton != null) {
+            lockNowButton.setVisibility(unlocked ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void onLockdownState(LockdownState state) {
@@ -169,7 +239,13 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         if (lockdownStatusText != null) {
             lockdownStatusText.setText(formatLockdownStatus(state));
         }
-        if (state instanceof LockdownState.NeedsProvision) {
+        updateLockdownButtons(state);
+        if (state instanceof LockdownState.Disabled) {
+            // Lockdown is off (capable but not provisioned, or just disabled). Passive state —
+            // no dialog; the operator can turn it on via the Enable button.
+            dismissPassphraseDialog();
+            dismissBackoffDialog();
+        } else if (state instanceof LockdownState.NeedsProvision) {
             dismissBackoffDialog();
             showPassphraseDialog(true);
         } else if (state instanceof LockdownState.Locked) {
@@ -199,6 +275,7 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
 
     private String formatLockdownStatus(LockdownState state) {
         if (state instanceof LockdownState.None) return "Status: not locked";
+        if (state instanceof LockdownState.Disabled) return "Status: lockdown off (tap Enable to turn on)";
         if (state instanceof LockdownState.NeedsProvision) return "Status: needs passphrase setup";
         if (state instanceof LockdownState.Locked) {
             String reason = ((LockdownState.Locked) state).getReason();
@@ -263,7 +340,7 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
             }
             int boots = parseIntOrZero(bootsField.getText().toString());
             int hours = parseIntOrZero(hoursField.getText().toString());
-            meshtasticBridge.submitLockdownPassphrase(pass, boots, hours);
+            meshtasticBridge.submitLockdownPassphrase(pass, boots, hours, 0);
         });
         b.setNegativeButton("Cancel", null);
         b.setCancelable(false);
@@ -326,6 +403,138 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
                 .show();
     }
 
+    /**
+     * Operator-initiated ENABLE (client toggle ON). Sends a passphrase to a DISABLED device,
+     * which the firmware provisions into lockdown. Guarded with a type-to-confirm because the
+     * first enable irreversibly burns the APPROTECT debug-port lockout.
+     */
+    private void confirmAndEnableLockdown() {
+        Context dlgCtx = getMapView().getContext();
+        LinearLayout container = new LinearLayout(dlgCtx);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (16 * dlgCtx.getResources().getDisplayMetrics().density);
+        container.setPadding(pad, pad, pad, pad);
+
+        TextView warn = new TextView(dlgCtx);
+        warn.setText("Enabling lockdown encrypts the device's stored config and, on supported "
+                + "hardware, PERMANENTLY burns the debug-port (APPROTECT) lockout. That burn is "
+                + "IRREVERSIBLE — disabling lockdown later decrypts your data but the debug port "
+                + "stays locked for the life of the device.\n\nPick a passphrase you can re-enter; "
+                + "if you lose it and the boot token expires, the device is unrecoverable.");
+        warn.setTextColor(0xFFFFAAAA);
+        container.addView(warn);
+
+        final EditText passField = new EditText(dlgCtx);
+        passField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passField.setHint("Passphrase (1–32 chars)");
+        container.addView(passField);
+
+        final EditText passConfirmField = new EditText(dlgCtx);
+        passConfirmField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passConfirmField.setHint("Re-enter passphrase");
+        container.addView(passConfirmField);
+
+        TextView bootsLabel = new TextView(dlgCtx);
+        bootsLabel.setText("Boots remaining (0 = firmware default)");
+        container.addView(bootsLabel);
+        final EditText bootsField = new EditText(dlgCtx);
+        bootsField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        bootsField.setText("0");
+        container.addView(bootsField);
+
+        TextView hoursLabel = new TextView(dlgCtx);
+        hoursLabel.setText("Hours valid (0 = no time limit)");
+        container.addView(hoursLabel);
+        final EditText hoursField = new EditText(dlgCtx);
+        hoursField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        hoursField.setText("0");
+        container.addView(hoursField);
+
+        TextView sessionLabel = new TextView(dlgCtx);
+        sessionLabel.setText("Max session seconds (0 = unlimited)");
+        container.addView(sessionLabel);
+        final EditText sessionField = new EditText(dlgCtx);
+        sessionField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        sessionField.setText("0");
+        container.addView(sessionField);
+
+        TextView confirmLabel = new TextView(dlgCtx);
+        confirmLabel.setText("Type ENABLE to confirm the irreversible burn");
+        container.addView(confirmLabel);
+        final EditText confirmField = new EditText(dlgCtx);
+        confirmField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        confirmField.setHint("ENABLE");
+        container.addView(confirmField);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(dlgCtx);
+        b.setTitle("Enable lockdown");
+        b.setView(container);
+        b.setNegativeButton("Cancel", null);
+        // Wire the positive button manually so validation failures don't dismiss the dialog.
+        b.setPositiveButton("Enable lockdown", null);
+        final AlertDialog dialog = b.create();
+        dialog.setOnShowListener(di -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String pass = passField.getText().toString();
+            if (pass.isEmpty() || pass.length() > 32) {
+                Toast.makeText(dlgCtx, "Passphrase must be 1–32 bytes", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (!pass.equals(passConfirmField.getText().toString())) {
+                Toast.makeText(dlgCtx, "Passphrases don't match", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (!"ENABLE".contentEquals(confirmField.getText().toString().trim())) {
+                Toast.makeText(dlgCtx, "Type ENABLE to confirm", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int boots = parseIntOrZero(bootsField.getText().toString());
+            int hours = parseIntOrZero(hoursField.getText().toString());
+            int maxSession = parseIntOrZero(sessionField.getText().toString());
+            meshtasticBridge.submitLockdownPassphrase(pass, boots, hours, maxSession);
+            Toast.makeText(dlgCtx, "Enabling lockdown…", Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+        }));
+        dialog.show();
+    }
+
+    /**
+     * Operator-initiated DISABLE (client toggle OFF). Requires the current passphrase; the
+     * firmware decrypts storage back to plaintext and reboots out of lockdown.
+     */
+    private void confirmAndDisableLockdown() {
+        Context dlgCtx = getMapView().getContext();
+        LinearLayout container = new LinearLayout(dlgCtx);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (16 * dlgCtx.getResources().getDisplayMetrics().density);
+        container.setPadding(pad, pad, pad, pad);
+
+        TextView msg = new TextView(dlgCtx);
+        msg.setText("This decrypts the device's stored config back to plaintext and reboots it out "
+                + "of lockdown. The one-time APPROTECT debug-port burn is NOT undone. Enter the "
+                + "current passphrase to authorize.");
+        container.addView(msg);
+
+        final EditText passField = new EditText(dlgCtx);
+        passField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passField.setHint("Current passphrase");
+        container.addView(passField);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(dlgCtx);
+        b.setTitle("Disable lockdown");
+        b.setView(container);
+        b.setNegativeButton("Cancel", null);
+        b.setPositiveButton("Disable lockdown", (d, w) -> {
+            String pass = passField.getText().toString();
+            if (pass.isEmpty() || pass.length() > 32) {
+                Toast.makeText(dlgCtx, "Passphrase must be 1–32 bytes", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            meshtasticBridge.disableLockdown(pass);
+            Toast.makeText(dlgCtx, "Disabling lockdown…", Toast.LENGTH_SHORT).show();
+        });
+        b.show();
+    }
+
     private static int parseIntOrZero(String s) {
         try { return Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
     }
@@ -345,12 +554,17 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
                 .setIndicator("Status")
                 .setContent(R.id.tab_status);
         tabHost.addTab(statusTab);
-        
+
+        TabHost.TabSpec meshTab = tabHost.newTabSpec("mesh")
+                .setIndicator("Mesh")
+                .setContent(R.id.tab_mesh);
+        tabHost.addTab(meshTab);
+
         TabHost.TabSpec settingsTab = tabHost.newTabSpec("settings")
                 .setIndicator("Settings")
                 .setContent(R.id.tab_settings);
         tabHost.addTab(settingsTab);
-        
+
         // Set up tab change listener to refresh settings tab when viewed
         tabHost.setOnTabChangedListener(tabId -> {
             if ("settings".equals(tabId)) {
@@ -359,6 +573,8 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
                 // Force refresh status tab when switching to it
                 updateConnectionStatus();
                 updateDeviceInfoForced();
+            } else if ("mesh".equals(tabId)) {
+                refreshMeshTab();
             }
         });
         
@@ -430,6 +646,12 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         
         // Set up settings tab
         setupSettingsTab();
+
+        // Set up the device-configuration controls (spinners, apply/reload)
+        setupDeviceConfigUi();
+
+        // Set up the Mesh tab node roster
+        setupMeshTab();
         
         // Set up device list item click
         deviceList.setOnItemClickListener((parent, view, position, id) -> {
@@ -467,7 +689,16 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         if (channelPasswordField != null) {
             channelPasswordField.setText(savedPassword);
         }
-        
+
+        // Firmware/hardware readout — refresh every time the tab opens, since metadata can
+        // arrive after the one-time config populate.
+        updateFirmwareInfo();
+
+        // Populate the device-configuration fields from the connected device (once per session)
+        if (!settingsPopulated) {
+            populateSettingsFromDevice();
+        }
+
         // Force update device info when manually switching to settings tab
         updateDeviceInfoForced();
         
@@ -476,7 +707,373 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         
         Log.d(TAG, "Settings tab refreshed - password field updated, device info updated");
     }
-    
+
+    // ============================ Device configuration UI ============================
+
+    private void setupDeviceConfigUi() {
+        spinnerRegion = templateView.findViewById(R.id.spinner_region);
+        spinnerModemPreset = templateView.findViewById(R.id.spinner_modem_preset);
+        spinnerRole = templateView.findViewById(R.id.spinner_role);
+        spinnerRebroadcastMode = templateView.findViewById(R.id.spinner_rebroadcast_mode);
+        spinnerGpsMode = templateView.findViewById(R.id.spinner_gps_mode);
+        spinnerPairingMode = templateView.findViewById(R.id.spinner_pairing_mode);
+        spinnerDisplayMode = templateView.findViewById(R.id.spinner_display_mode);
+
+        switchUsePreset = templateView.findViewById(R.id.switch_use_preset);
+        switchTxEnabled = templateView.findViewById(R.id.switch_tx_enabled);
+        switchIgnoreMqtt = templateView.findViewById(R.id.switch_ignore_mqtt);
+        switchOverrideDutyCycle = templateView.findViewById(R.id.switch_override_duty_cycle);
+        switchPositionSmart = templateView.findViewById(R.id.switch_position_smart);
+        switchFixedPosition = templateView.findViewById(R.id.switch_fixed_position);
+        switchPowerSaving = templateView.findViewById(R.id.switch_power_saving);
+        switchBtEnabled = templateView.findViewById(R.id.switch_bt_enabled);
+        switchWakeOnTap = templateView.findViewById(R.id.switch_wake_on_tap);
+        switchFlipScreen = templateView.findViewById(R.id.switch_flip_screen);
+        switchWifiEnabled = templateView.findViewById(R.id.switch_wifi_enabled);
+        switchEthEnabled = templateView.findViewById(R.id.switch_eth_enabled);
+        switchUplink = templateView.findViewById(R.id.switch_uplink);
+        switchDownlink = templateView.findViewById(R.id.switch_downlink);
+
+        editHopLimit = templateView.findViewById(R.id.edit_hop_limit);
+        editNodeInfoBroadcastSecs = templateView.findViewById(R.id.edit_node_info_broadcast_secs);
+        editPositionBroadcastSecs = templateView.findViewById(R.id.edit_position_broadcast_secs);
+        editGpsUpdateInterval = templateView.findViewById(R.id.edit_gps_update_interval);
+        editOnBatteryShutdown = templateView.findViewById(R.id.edit_on_battery_shutdown);
+        editLsSecs = templateView.findViewById(R.id.edit_ls_secs);
+        editMinWakeSecs = templateView.findViewById(R.id.edit_min_wake_secs);
+        editFixedPin = templateView.findViewById(R.id.edit_fixed_pin);
+        editScreenOnSecs = templateView.findViewById(R.id.edit_screen_on_secs);
+        editChannelName = templateView.findViewById(R.id.edit_channel_name);
+
+        applyConfigButton = templateView.findViewById(R.id.btn_apply_config);
+        reloadConfigButton = templateView.findViewById(R.id.btn_reload_config);
+        configApplyStatus = templateView.findViewById(R.id.config_apply_status);
+        settingsFirmwareInfo = templateView.findViewById(R.id.settings_firmware_info);
+
+        // Populate the enum spinners straight from the generated proto enums so we always match
+        // exactly what the firmware supports (including region codes added in newer firmware).
+        regionValues = setupEnumSpinner(spinnerRegion, ConfigProtos.Config.LoRaConfig.RegionCode.values());
+        modemPresetValues = setupEnumSpinner(spinnerModemPreset, ConfigProtos.Config.LoRaConfig.ModemPreset.values());
+        roleValues = setupEnumSpinner(spinnerRole, ConfigProtos.Config.DeviceConfig.Role.values());
+        rebroadcastValues = setupEnumSpinner(spinnerRebroadcastMode, ConfigProtos.Config.DeviceConfig.RebroadcastMode.values());
+        gpsModeValues = setupEnumSpinner(spinnerGpsMode, ConfigProtos.Config.PositionConfig.GpsMode.values());
+        pairingModeValues = setupEnumSpinner(spinnerPairingMode, ConfigProtos.Config.BluetoothConfig.PairingMode.values());
+        displayModeValues = setupEnumSpinner(spinnerDisplayMode, ConfigProtos.Config.DisplayConfig.DisplayMode.values());
+
+        if (reloadConfigButton != null) {
+            reloadConfigButton.setOnClickListener(v -> {
+                settingsPopulated = false;
+                populateSettingsFromDevice();
+            });
+        }
+        if (applyConfigButton != null) {
+            applyConfigButton.setOnClickListener(v -> confirmAndApplyConfig());
+        }
+    }
+
+    /** Build a spinner from a proto enum's values, dropping the synthetic UNRECOGNIZED entry. */
+    private <T extends Enum<T>> List<T> setupEnumSpinner(Spinner spinner, T[] values) {
+        List<T> list = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (T v : values) {
+            if ("UNRECOGNIZED".equals(v.name())) continue;
+            list.add(v);
+            names.add(v.name());
+        }
+        if (spinner != null) {
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                    pluginContext, android.R.layout.simple_spinner_item, names);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinner.setAdapter(adapter);
+        }
+        return list;
+    }
+
+    private <T> void selectSpinner(Spinner spinner, List<T> values, T value) {
+        if (spinner == null || values == null || value == null) return;
+        int idx = values.indexOf(value);
+        if (idx >= 0) spinner.setSelection(idx);
+    }
+
+    private <T> T spinnerValue(Spinner spinner, List<T> values, T fallback) {
+        if (spinner == null || values == null || values.isEmpty()) return fallback;
+        int pos = spinner.getSelectedItemPosition();
+        if (pos < 0 || pos >= values.size()) return fallback;
+        return values.get(pos);
+    }
+
+    private void setChecked(Switch s, boolean checked) {
+        if (s != null) s.setChecked(checked);
+    }
+
+    private boolean isChecked(Switch s) {
+        return s != null && s.isChecked();
+    }
+
+    private void setNumber(EditText e, int value) {
+        if (e != null) e.setText(String.valueOf(value));
+    }
+
+    private int numberOf(EditText e, int fallback) {
+        if (e == null) return fallback;
+        try {
+            String t = e.getText().toString().trim();
+            return t.isEmpty() ? fallback : Integer.parseInt(t);
+        } catch (Exception ex) {
+            return fallback;
+        }
+    }
+
+    private boolean isConnected() {
+        MeshtasticManager.ConnectionState state = meshtasticBridge.getConnectionState();
+        return state == MeshtasticManager.ConnectionState.CONNECTED
+                || state == MeshtasticManager.ConnectionState.CONFIGURED;
+    }
+
+    /** Show the connected device's firmware version + hardware model on the Settings tab. */
+    private void updateFirmwareInfo() {
+        if (settingsFirmwareInfo == null) return;
+        if (!isConnected()) {
+            settingsFirmwareInfo.setText("Firmware: — (not connected)");
+            return;
+        }
+        String fw = "Unknown";
+        String hw = null;
+        try {
+            com.geeksville.mesh.MeshProtos.DeviceMetadata md = meshtasticBridge.getDeviceMetadata();
+            if (md != null) {
+                if (!md.getFirmwareVersion().isEmpty()) fw = md.getFirmwareVersion();
+                hw = md.getHwModel().toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read device metadata for firmware info: " + e.getMessage());
+        }
+        StringBuilder sb = new StringBuilder("Firmware: ").append(fw);
+        if (hw != null && !hw.isEmpty()) sb.append("  •  HW: ").append(hw);
+        settingsFirmwareInfo.setText(sb.toString());
+    }
+
+    /** Read the device's current configuration into the Settings fields. */
+    private void populateSettingsFromDevice() {
+        updateFirmwareInfo();
+        if (!isConnected()) {
+            if (configApplyStatus != null) {
+                configApplyStatus.setText("Connect a device to read and edit its configuration.");
+            }
+            return;
+        }
+
+        ConfigProtos.Config.LoRaConfig lora = meshtasticBridge.getLoraConfig();
+        if (lora != null) {
+            selectSpinner(spinnerRegion, regionValues, lora.getRegion());
+            selectSpinner(spinnerModemPreset, modemPresetValues, lora.getModemPreset());
+            setChecked(switchUsePreset, lora.getUsePreset());
+            setNumber(editHopLimit, lora.getHopLimit());
+            setChecked(switchTxEnabled, lora.getTxEnabled());
+            setChecked(switchIgnoreMqtt, lora.getIgnoreMqtt());
+            setChecked(switchOverrideDutyCycle, lora.getOverrideDutyCycle());
+        }
+
+        ConfigProtos.Config.DeviceConfig dev = meshtasticBridge.getDeviceConfig();
+        if (dev != null) {
+            selectSpinner(spinnerRole, roleValues, dev.getRole());
+            selectSpinner(spinnerRebroadcastMode, rebroadcastValues, dev.getRebroadcastMode());
+            setNumber(editNodeInfoBroadcastSecs, dev.getNodeInfoBroadcastSecs());
+        }
+
+        ConfigProtos.Config.PositionConfig pos = meshtasticBridge.getPositionConfig();
+        if (pos != null) {
+            selectSpinner(spinnerGpsMode, gpsModeValues, pos.getGpsMode());
+            setNumber(editPositionBroadcastSecs, pos.getPositionBroadcastSecs());
+            setNumber(editGpsUpdateInterval, pos.getGpsUpdateInterval());
+            setChecked(switchPositionSmart, pos.getPositionBroadcastSmartEnabled());
+            setChecked(switchFixedPosition, pos.getFixedPosition());
+        }
+
+        ConfigProtos.Config.PowerConfig pow = meshtasticBridge.getPowerConfig();
+        if (pow != null) {
+            setChecked(switchPowerSaving, pow.getIsPowerSaving());
+            setNumber(editOnBatteryShutdown, pow.getOnBatteryShutdownAfterSecs());
+            setNumber(editLsSecs, pow.getLsSecs());
+            setNumber(editMinWakeSecs, pow.getMinWakeSecs());
+        }
+
+        ConfigProtos.Config.BluetoothConfig bt = meshtasticBridge.getBluetoothConfig();
+        if (bt != null) {
+            setChecked(switchBtEnabled, bt.getEnabled());
+            selectSpinner(spinnerPairingMode, pairingModeValues, bt.getMode());
+            setNumber(editFixedPin, bt.getFixedPin());
+        }
+
+        ConfigProtos.Config.DisplayConfig disp = meshtasticBridge.getDisplayConfig();
+        if (disp != null) {
+            setNumber(editScreenOnSecs, disp.getScreenOnSecs());
+            selectSpinner(spinnerDisplayMode, displayModeValues, disp.getDisplaymode());
+            setChecked(switchWakeOnTap, disp.getWakeOnTapOrMotion());
+            setChecked(switchFlipScreen, disp.getFlipScreen());
+        }
+
+        ConfigProtos.Config.NetworkConfig net = meshtasticBridge.getNetworkConfig();
+        if (net != null) {
+            setChecked(switchWifiEnabled, net.getWifiEnabled());
+            setChecked(switchEthEnabled, net.getEthEnabled());
+        }
+
+        ChannelProtos.Channel ch = meshtasticBridge.getPrimaryChannel();
+        if (ch != null && ch.hasSettings()) {
+            if (editChannelName != null) editChannelName.setText(ch.getSettings().getName());
+            setChecked(switchUplink, ch.getSettings().getUplinkEnabled());
+            setChecked(switchDownlink, ch.getSettings().getDownlinkEnabled());
+        }
+
+        settingsPopulated = true;
+        if (configApplyStatus != null) {
+            configApplyStatus.setText("Loaded from device. Edit fields, then tap 'Apply to device'.");
+        }
+    }
+
+    /**
+     * A hardened (lockdown) device rejects admin writes until this connection is unlocked.
+     * Applying config to a still-locked device would just time out, so block it and tell the
+     * operator to unlock first. None (non-hardened / no signal yet) and Unlocked are allowed.
+     */
+    private boolean isLockdownBlockingWrites() {
+        return !(currentLockdownState instanceof LockdownState.None
+                || currentLockdownState instanceof LockdownState.Unlocked);
+    }
+
+    private void confirmAndApplyConfig() {
+        if (!isConnected()) {
+            Toast.makeText(pluginContext, "Connect a device first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (isLockdownBlockingWrites()) {
+            new AlertDialog.Builder(getMapView().getContext())
+                    .setTitle("Device locked")
+                    .setMessage("This device is in lockdown and won't accept configuration changes "
+                            + "until this connection is unlocked. Unlock the device, then apply again.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Apply configuration?")
+                .setMessage("Only changed settings are sent to the device. Some changes (role, power, "
+                        + "Bluetooth) can reboot the radio and briefly drop this connection.")
+                .setPositiveButton("Apply", (d, w) -> applyConfigToDevice())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Build a Config from the device's current sections + the UI edits and push it. */
+    private void applyConfigToDevice() {
+        ConfigProtos.Config.Builder cfg = ConfigProtos.Config.newBuilder();
+
+        // LoRa
+        ConfigProtos.Config.LoRaConfig curLora = meshtasticBridge.getLoraConfig();
+        ConfigProtos.Config.LoRaConfig.Builder lb = curLora != null
+                ? curLora.toBuilder() : ConfigProtos.Config.LoRaConfig.newBuilder();
+        lb.setRegion(spinnerValue(spinnerRegion, regionValues, lb.getRegion()));
+        lb.setModemPreset(spinnerValue(spinnerModemPreset, modemPresetValues, lb.getModemPreset()));
+        lb.setUsePreset(isChecked(switchUsePreset));
+        lb.setHopLimit(numberOf(editHopLimit, lb.getHopLimit()));
+        lb.setTxEnabled(isChecked(switchTxEnabled));
+        lb.setIgnoreMqtt(isChecked(switchIgnoreMqtt));
+        lb.setOverrideDutyCycle(isChecked(switchOverrideDutyCycle));
+        cfg.setLora(lb.build());
+
+        // Device
+        ConfigProtos.Config.DeviceConfig curDev = meshtasticBridge.getDeviceConfig();
+        ConfigProtos.Config.DeviceConfig.Builder db = curDev != null
+                ? curDev.toBuilder() : ConfigProtos.Config.DeviceConfig.newBuilder();
+        db.setRole(spinnerValue(spinnerRole, roleValues, db.getRole()));
+        db.setRebroadcastMode(spinnerValue(spinnerRebroadcastMode, rebroadcastValues, db.getRebroadcastMode()));
+        db.setNodeInfoBroadcastSecs(numberOf(editNodeInfoBroadcastSecs, db.getNodeInfoBroadcastSecs()));
+        cfg.setDevice(db.build());
+
+        // Position
+        ConfigProtos.Config.PositionConfig curPos = meshtasticBridge.getPositionConfig();
+        ConfigProtos.Config.PositionConfig.Builder pb = curPos != null
+                ? curPos.toBuilder() : ConfigProtos.Config.PositionConfig.newBuilder();
+        pb.setGpsMode(spinnerValue(spinnerGpsMode, gpsModeValues, pb.getGpsMode()));
+        pb.setPositionBroadcastSecs(numberOf(editPositionBroadcastSecs, pb.getPositionBroadcastSecs()));
+        pb.setGpsUpdateInterval(numberOf(editGpsUpdateInterval, pb.getGpsUpdateInterval()));
+        pb.setPositionBroadcastSmartEnabled(isChecked(switchPositionSmart));
+        pb.setFixedPosition(isChecked(switchFixedPosition));
+        cfg.setPosition(pb.build());
+
+        // Power
+        ConfigProtos.Config.PowerConfig curPow = meshtasticBridge.getPowerConfig();
+        ConfigProtos.Config.PowerConfig.Builder powb = curPow != null
+                ? curPow.toBuilder() : ConfigProtos.Config.PowerConfig.newBuilder();
+        powb.setIsPowerSaving(isChecked(switchPowerSaving));
+        powb.setOnBatteryShutdownAfterSecs(numberOf(editOnBatteryShutdown, powb.getOnBatteryShutdownAfterSecs()));
+        powb.setLsSecs(numberOf(editLsSecs, powb.getLsSecs()));
+        powb.setMinWakeSecs(numberOf(editMinWakeSecs, powb.getMinWakeSecs()));
+        cfg.setPower(powb.build());
+
+        // Bluetooth
+        ConfigProtos.Config.BluetoothConfig curBt = meshtasticBridge.getBluetoothConfig();
+        ConfigProtos.Config.BluetoothConfig.Builder btb = curBt != null
+                ? curBt.toBuilder() : ConfigProtos.Config.BluetoothConfig.newBuilder();
+        btb.setEnabled(isChecked(switchBtEnabled));
+        btb.setMode(spinnerValue(spinnerPairingMode, pairingModeValues, btb.getMode()));
+        btb.setFixedPin(numberOf(editFixedPin, btb.getFixedPin()));
+        cfg.setBluetooth(btb.build());
+
+        // Display
+        ConfigProtos.Config.DisplayConfig curDisp = meshtasticBridge.getDisplayConfig();
+        ConfigProtos.Config.DisplayConfig.Builder dispb = curDisp != null
+                ? curDisp.toBuilder() : ConfigProtos.Config.DisplayConfig.newBuilder();
+        dispb.setScreenOnSecs(numberOf(editScreenOnSecs, dispb.getScreenOnSecs()));
+        dispb.setDisplaymode(spinnerValue(spinnerDisplayMode, displayModeValues, dispb.getDisplaymode()));
+        dispb.setWakeOnTapOrMotion(isChecked(switchWakeOnTap));
+        dispb.setFlipScreen(isChecked(switchFlipScreen));
+        cfg.setDisplay(dispb.build());
+
+        // Network
+        ConfigProtos.Config.NetworkConfig curNet = meshtasticBridge.getNetworkConfig();
+        ConfigProtos.Config.NetworkConfig.Builder netb = curNet != null
+                ? curNet.toBuilder() : ConfigProtos.Config.NetworkConfig.newBuilder();
+        netb.setWifiEnabled(isChecked(switchWifiEnabled));
+        netb.setEthEnabled(isChecked(switchEthEnabled));
+        cfg.setNetwork(netb.build());
+
+        // Channel — only apply if the user changed name/uplink/downlink or entered a new password.
+        String uiName = editChannelName != null ? editChannelName.getText().toString() : "";
+        boolean uiUp = isChecked(switchUplink);
+        boolean uiDown = isChecked(switchDownlink);
+        String password = channelPasswordField != null ? channelPasswordField.getText().toString().trim() : "";
+        boolean channelChanged = !password.isEmpty();
+        ChannelProtos.Channel ch = meshtasticBridge.getPrimaryChannel();
+        if (ch != null && ch.hasSettings()) {
+            ChannelProtos.ChannelSettings s = ch.getSettings();
+            if (!s.getName().equals(uiName) || s.getUplinkEnabled() != uiUp || s.getDownlinkEnabled() != uiDown) {
+                channelChanged = true;
+            }
+        } else if (!uiName.isEmpty() || uiUp || uiDown) {
+            channelChanged = true;
+        }
+
+        if (configApplyStatus != null) configApplyStatus.setText("Applying to device…");
+        if (applyConfigButton != null) applyConfigButton.setEnabled(false);
+
+        meshtasticBridge.applyUserConfig(cfg.build(), channelChanged, uiName, password, uiUp, uiDown,
+                success -> uiHandler.post(() -> {
+                    if (applyConfigButton != null) applyConfigButton.setEnabled(true);
+                    Toast.makeText(pluginContext,
+                            success ? "Configuration applied" : "Some settings failed to apply",
+                            Toast.LENGTH_LONG).show();
+                    if (configApplyStatus != null) {
+                        configApplyStatus.setText(success
+                                ? "Applied. The device may reboot; reconnect if it drops."
+                                : "Apply failed — check the connection and try again.");
+                    }
+                    // Force a fresh read next time the tab is opened so the UI reflects the device.
+                    settingsPopulated = false;
+                }));
+    }
+
     private void updateDeviceInfoForced() {
         // Reset throttle timer to force update
         lastDeviceInfoUpdate = 0;
@@ -836,7 +1433,12 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
                 
                 // Update connection status - this should always happen to support autoconnect
                 updateConnectionStatus();
-                
+
+                // Keep the Mesh roster live while that tab is the one on screen.
+                if (isVisible() && tabHost != null && "mesh".equals(tabHost.getCurrentTabTag())) {
+                    refreshMeshTab();
+                }
+
                 // Continue polling - poll more frequently when visible and connected
                 if (isVisible()) {
                     // Poll faster when connected to keep status fresh
@@ -1102,7 +1704,10 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
                 
                 // Reset test message flag for next connection
                 testMessageSent = false;
-                
+
+                // Re-read device configuration into the Settings tab on the next connection
+                settingsPopulated = false;
+
                 // Hide status tab cards and device metadata when disconnected
                 if (signalInfoCard != null) signalInfoCard.setVisibility(View.GONE);
                 if (statsCard != null) statsCard.setVisibility(View.GONE);
@@ -1389,6 +1994,236 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements Drop
         return filter;
     }
     
+    // ============================ Mesh tab (node roster) ============================
+
+    private void setupMeshTab() {
+        meshNodeList = templateView.findViewById(R.id.mesh_node_list);
+        meshSummary = templateView.findViewById(R.id.mesh_summary);
+        meshAdapter = new MeshNodeAdapter();
+        if (meshNodeList != null) {
+            meshNodeList.setAdapter(meshAdapter);
+        }
+    }
+
+    /**
+     * Rebuild the roster from the connected node's node DB. Nodes are grouped by hop distance —
+     * so nodes beyond our direct radio horizon (learned via the mesh) show up under their own
+     * "N hops away" section — and sorted within a group by signal quality.
+     */
+    private void refreshMeshTab() {
+        if (meshAdapter == null) return;
+
+        if (!isConnected()) {
+            meshAdapter.setItems(new ArrayList<>());
+            if (meshSummary != null) meshSummary.setText("Connect to see mesh nodes");
+            return;
+        }
+
+        List<MeshProtos.NodeInfo> nodes = meshtasticBridge.getNodes();
+        long myNum = -1L;
+        MeshProtos.MyNodeInfo myInfo = meshtasticBridge.getMyNodeInfo();
+        if (myInfo != null) myNum = myInfo.getNodeNum();
+
+        // Bucket by hop distance: 0 = direct, 1.. = relayed, MAX_VALUE = unknown (no hops_away).
+        java.util.TreeMap<Integer, List<MeshProtos.NodeInfo>> buckets = new java.util.TreeMap<>();
+        int total = 0;
+        int direct = 0;
+        for (MeshProtos.NodeInfo n : nodes) {
+            if (n.getNodeNum() == myNum) continue; // exclude our own node
+            int bucket = n.getHasHops() ? n.getHopsAway() : Integer.MAX_VALUE; // unknown sorts last
+            List<MeshProtos.NodeInfo> list = buckets.get(bucket);
+            if (list == null) {
+                list = new ArrayList<>();
+                buckets.put(bucket, list);
+            }
+            list.add(n);
+            total++;
+            if (bucket == 0) direct++;
+        }
+
+        // Flatten into header + node rows, strongest SNR first within each hop group.
+        List<Object> items = new ArrayList<>();
+        for (Map.Entry<Integer, List<MeshProtos.NodeInfo>> e : buckets.entrySet()) {
+            List<MeshProtos.NodeInfo> list = e.getValue();
+            Collections.sort(list, (a, b) -> Float.compare(b.getSnr(), a.getSnr()));
+            items.add(new MeshGroup(e.getKey(), list.size()));
+            items.addAll(list);
+        }
+
+        meshAdapter.setItems(items);
+        if (meshSummary != null) {
+            int beyond = total - direct;
+            meshSummary.setText(total + (total == 1 ? " node" : " nodes")
+                    + " · " + direct + " direct · " + beyond + " beyond");
+        }
+    }
+
+    /** Header marker for a hop-distance group in the roster. */
+    private static class MeshGroup {
+        final int hop; // 0 = direct, Integer.MAX_VALUE = unknown
+        final int count;
+        MeshGroup(int hop, int count) { this.hop = hop; this.count = count; }
+    }
+
+    private static String meshGroupLabel(int hop, int count) {
+        String base;
+        if (hop == 0) base = "DIRECT";
+        else if (hop == Integer.MAX_VALUE) base = "UNKNOWN DISTANCE";
+        else base = hop + (hop == 1 ? " HOP AWAY" : " HOPS AWAY");
+        return base + "  ·  " + count;
+    }
+
+    /** Accent color per hop depth — greener when close, cooler/farther as hops increase. */
+    private static int hopAccentColor(int hop) {
+        switch (hop) {
+            case 0:  return 0xFF43A047; // direct - green
+            case 1:  return 0xFF26C6DA; // 1 hop - cyan
+            case 2:  return 0xFF42A5F5; // 2 hops - blue
+            case 3:  return 0xFF7E57C2; // 3 hops - purple
+            case Integer.MAX_VALUE: return 0xFF666666; // unknown - gray
+            default: return 0xFFAB47BC; // 4+ hops - magenta
+        }
+    }
+
+    /** Map a Meshtastic SNR (dB) to 0..5 filled bars. */
+    private static int snrLevel(float snr) {
+        if (snr >= 8f)   return 5;
+        if (snr >= 3f)   return 4;
+        if (snr >= -2f)  return 3;
+        if (snr >= -8f)  return 2;
+        if (snr >= -15f) return 1;
+        return 0;
+    }
+
+    private static int snrColor(int level) {
+        switch (level) {
+            case 5:
+            case 4: return 0xFF43A047; // strong - green
+            case 3: return 0xFFC0CA33; // ok - lime
+            case 2: return 0xFFFB8C00; // weak - orange
+            case 1: return 0xFFE53935; // poor - red
+            default: return 0xFF777777; // none
+        }
+    }
+
+    private static String formatLastHeard(long epochSecs) {
+        if (epochSecs <= 0) return "";
+        long delta = (System.currentTimeMillis() / 1000L) - epochSecs;
+        if (delta < 0) delta = 0;
+        if (delta < 60) return "now";
+        if (delta < 3600) return (delta / 60) + "m";
+        if (delta < 86400) return (delta / 3600) + "h";
+        return (delta / 86400) + "d";
+    }
+
+    /**
+     * Roster adapter: two row types (hop-group header + node row). Node rows render a segmented
+     * SNR bar, per-node RSSI when we've heard it directly, battery and freshness.
+     */
+    private class MeshNodeAdapter extends BaseAdapter {
+        private List<Object> items = new ArrayList<>();
+
+        void setItems(List<Object> newItems) {
+            items = newItems;
+            notifyDataSetChanged();
+        }
+
+        @Override public int getCount() { return items.size(); }
+        @Override public Object getItem(int position) { return items.get(position); }
+        @Override public long getItemId(int position) { return position; }
+        @Override public int getViewTypeCount() { return 2; }
+        @Override public boolean isEnabled(int position) { return false; } // non-clickable rows
+        @Override public boolean areAllItemsEnabled() { return false; }
+
+        @Override public int getItemViewType(int position) {
+            return (items.get(position) instanceof MeshGroup) ? 0 : 1;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            Object item = items.get(position);
+            LayoutInflater inflater = LayoutInflater.from(pluginContext);
+
+            if (item instanceof MeshGroup) {
+                MeshGroup g = (MeshGroup) item;
+                TextView header = (TextView) convertView;
+                if (header == null || !(header.getId() == R.id.group_header)) {
+                    header = (TextView) inflater.inflate(R.layout.mesh_group_header, parent, false);
+                }
+                header.setText(meshGroupLabel(g.hop, g.count));
+                header.setTextColor(hopAccentColor(g.hop));
+                return header;
+            }
+
+            MeshProtos.NodeInfo node = (MeshProtos.NodeInfo) item;
+
+            View view = convertView;
+            if (view == null || view.findViewById(R.id.node_name) == null) {
+                view = inflater.inflate(R.layout.mesh_node_item, parent, false);
+            }
+
+            // Name / long name
+            String shortName = node.getShortName();
+            String longName = node.getLongName();
+            if (shortName == null || shortName.isEmpty()) {
+                shortName = String.format("!%04x", node.getNodeNum() & 0xFFFF);
+            }
+            ((TextView) view.findViewById(R.id.node_name)).setText(shortName);
+            TextView longView = view.findViewById(R.id.node_long);
+            if (longName == null || longName.isEmpty() || longName.equals(shortName)) {
+                longView.setText("");
+                longView.setVisibility(View.GONE);
+            } else {
+                longView.setText(longName);
+                longView.setVisibility(View.VISIBLE);
+            }
+
+            // Hop accent stripe
+            int hop = node.getHasHops() ? node.getHopsAway() : Integer.MAX_VALUE;
+            view.findViewById(R.id.hop_accent).setBackgroundColor(hopAccentColor(hop));
+
+            // SNR bar
+            float snr = node.getSnr();
+            int level = snrLevel(snr);
+            int color = snrColor(level);
+            int[] segIds = { R.id.seg1, R.id.seg2, R.id.seg3, R.id.seg4, R.id.seg5 };
+            for (int i = 0; i < segIds.length; i++) {
+                view.findViewById(segIds[i]).setBackgroundColor(i < level ? color : 0xFF3A3A3A);
+            }
+
+            // SNR / RSSI text
+            StringBuilder sig = new StringBuilder();
+            sig.append(String.format("SNR %.1fdB", snr));
+            Integer rssi = meshtasticBridge.getNodeRssi(node.getNodeNum());
+            if (rssi != null) sig.append("  ·  ").append(rssi).append("dBm");
+            ((TextView) view.findViewById(R.id.node_signal)).setText(sig.toString());
+
+            // Battery
+            TextView batteryView = view.findViewById(R.id.node_battery);
+            int bl = node.getBatteryLevel();
+            if (bl >= 0) {
+                if (bl > 100) {
+                    batteryView.setText("⚡");
+                    batteryView.setTextColor(0xFF9CCC65);
+                } else {
+                    batteryView.setText(bl + "%");
+                    batteryView.setTextColor(bl < 20 ? 0xFFE53935 : (bl < 50 ? 0xFFFB8C00 : 0xFF9CCC65));
+                }
+            } else {
+                batteryView.setText("—");
+                batteryView.setTextColor(0xFF888888);
+            }
+
+            // Freshness + stale dimming
+            long lastHeard = node.getLastHeard();
+            ((TextView) view.findViewById(R.id.node_lastheard)).setText(formatLastHeard(lastHeard));
+            boolean stale = lastHeard > 0 && (System.currentTimeMillis() / 1000L - lastHeard) > 7200;
+            view.findViewById(R.id.mesh_row_root).setAlpha(stale ? 0.45f : 1.0f);
+
+            return view;
+        }
+    }
+
     /**
      * Device list adapter for the ListView
      */

@@ -331,27 +331,6 @@ class AtakMeshtasticBridge(
     }
     
     /**
-     * Apply TAK optimized configuration to the device
-     */
-    fun applyTakConfiguration(callback: (Boolean) -> Unit) {
-        if (meshtasticManager?.connectionState?.value != MeshtasticManager.ConnectionState.CONFIGURED) {
-            Log.w(TAG, "Cannot apply TAK configuration - device not configured")
-            callback(false)
-            return
-        }
-        
-        Log.i(TAG, "Applying TAK optimized configuration")
-        meshtasticManager?.applyTakOptimizedConfiguration { success ->
-            if (success) {
-                Log.i(TAG, "TAK configuration applied successfully")
-            } else {
-                Log.e(TAG, "Failed to apply TAK configuration")
-            }
-            callback(success)
-        } ?: callback(false)
-    }
-    
-    /**
      * Get current configuration from the device
      */
     fun getCurrentConfiguration(callback: (String?) -> Unit) {
@@ -452,8 +431,13 @@ class AtakMeshtasticBridge(
     /** Lockdown coordinator surface for the UI (state flow + actions). */
     fun getLockdownCoordinator(): LockdownCoordinator? = meshtasticManager?.lockdownCoordinator
 
-    fun submitLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
-        meshtasticManager?.lockdownCoordinator?.submitPassphrase(passphrase, boots, hours)
+    fun submitLockdownPassphrase(passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int) {
+        meshtasticManager?.lockdownCoordinator?.submitPassphrase(passphrase, boots, hours, maxSessionSeconds)
+    }
+
+    /** Turn lockdown OFF (requires the current passphrase). */
+    fun disableLockdown(passphrase: String) {
+        meshtasticManager?.lockdownCoordinator?.disableLockdown(passphrase)
     }
 
     fun lockNow() {
@@ -841,6 +825,9 @@ class AtakMeshtasticBridge(
     fun getNodes(): List<MeshProtos.NodeInfo> {
         return meshtasticManager?.getNodes() ?: emptyList()
     }
+
+    /** Last directly-measured RSSI (dBm) for a node number, or null if only heard via relay. */
+    fun getNodeRssi(nodeNum: Long): Int? = meshtasticManager?.getNodeRssi(nodeNum)
     
     fun getDeviceMetadata(): com.geeksville.mesh.MeshProtos.DeviceMetadata? {
         return meshtasticManager?.getDeviceMetadata()
@@ -856,6 +843,52 @@ class AtakMeshtasticBridge(
     
     fun getLoraConfig(): com.geeksville.mesh.ConfigProtos.Config.LoRaConfig? {
         return meshtasticManager?.getLoraConfig()
+    }
+
+    // Read-from-device accessors for the Settings UI. Null until the device reports each section.
+    fun getDeviceConfig(): com.geeksville.mesh.ConfigProtos.Config.DeviceConfig? =
+        meshtasticManager?.getDeviceConfig()
+    fun getPositionConfig(): com.geeksville.mesh.ConfigProtos.Config.PositionConfig? =
+        meshtasticManager?.getPositionConfig()
+    fun getPowerConfig(): com.geeksville.mesh.ConfigProtos.Config.PowerConfig? =
+        meshtasticManager?.getPowerConfig()
+    fun getNetworkConfig(): com.geeksville.mesh.ConfigProtos.Config.NetworkConfig? =
+        meshtasticManager?.getNetworkConfig()
+    fun getDisplayConfig(): com.geeksville.mesh.ConfigProtos.Config.DisplayConfig? =
+        meshtasticManager?.getDisplayConfig()
+    fun getBluetoothConfig(): com.geeksville.mesh.ConfigProtos.Config.BluetoothConfig? =
+        meshtasticManager?.getBluetoothConfig()
+    fun getPrimaryChannel(): com.geeksville.mesh.ChannelProtos.Channel? =
+        meshtasticManager?.getPrimaryChannel()
+
+    /** Java-friendly result callback for [applyUserConfig] (delivered on the main thread). */
+    fun interface ConfigApplyCallback {
+        fun onResult(success: Boolean)
+    }
+
+    /**
+     * Push user-edited config to the device. `newConfig` carries each editable section (built by
+     * the UI from the device's current section plus the user's changes); only sections that differ
+     * from the device are actually sent. Set applyChannel=true to also write the primary channel.
+     */
+    fun applyUserConfig(
+        newConfig: com.geeksville.mesh.ConfigProtos.Config,
+        applyChannel: Boolean,
+        channelName: String,
+        channelPassword: String,
+        uplinkEnabled: Boolean,
+        downlinkEnabled: Boolean,
+        callback: ConfigApplyCallback
+    ) {
+        val mgr = meshtasticManager
+        if (mgr == null) {
+            callback.onResult(false)
+            return
+        }
+        mgr.applyUserConfig(
+            newConfig, applyChannel, channelName, channelPassword,
+            uplinkEnabled, downlinkEnabled
+        ) { success -> callback.onResult(success) }
     }
     
     /**

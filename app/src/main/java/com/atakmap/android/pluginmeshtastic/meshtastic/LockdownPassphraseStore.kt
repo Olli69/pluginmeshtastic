@@ -10,6 +10,7 @@ data class StoredPassphrase(
     val passphrase: String,
     val boots: Int,
     val hours: Int,
+    val maxSessionSeconds: Int = 0,
 )
 
 /**
@@ -56,15 +57,17 @@ class LockdownPassphraseStore(context: Context) {
         val passphrase = prefs.getString("${key}_passphrase", null) ?: return null
         val boots = prefs.getInt("${key}_boots", DEFAULT_BOOTS)
         val hours = prefs.getInt("${key}_hours", 0)
-        return StoredPassphrase(passphrase, boots, hours)
+        val maxSessionSeconds = prefs.getInt("${key}_max_session_secs", 0)
+        return StoredPassphrase(passphrase, boots, hours, maxSessionSeconds)
     }
 
-    fun savePassphrase(deviceAddress: String, passphrase: String, boots: Int, hours: Int) {
+    fun savePassphrase(deviceAddress: String, passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int) {
         val key = sanitizeKey(deviceAddress)
         prefs.edit()
             .putString("${key}_passphrase", passphrase)
             .putInt("${key}_boots", boots)
             .putInt("${key}_hours", hours)
+            .putInt("${key}_max_session_secs", maxSessionSeconds)
             .apply()
     }
 
@@ -74,6 +77,7 @@ class LockdownPassphraseStore(context: Context) {
             .remove("${key}_passphrase")
             .remove("${key}_boots")
             .remove("${key}_hours")
+            .remove("${key}_max_session_secs")
             .apply()
     }
 

@@ -11,8 +11,15 @@ import kotlinx.coroutines.flow.StateFlow
  * dragging the entire [MeshtasticManager] into the unit-test surface.
  */
 interface LockdownSender {
-    /** Send AdminMessage.lockdown_auth with passphrase + boots/hours; lock_now=false. */
-    fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int)
+    /**
+     * Send AdminMessage.lockdown_auth with passphrase + boots/hours + optional per-session
+     * uptime cap; disable=false, lock_now=false. Firmware provisions (enables lockdown) when
+     * the device isn't yet provisioned, otherwise unlocks.
+     */
+    fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int)
+
+    /** Send AdminMessage.lockdown_auth with disable=true + passphrase; turns lockdown OFF. */
+    fun sendLockdownDisable(passphrase: String)
 
     /** Send AdminMessage.lockdown_auth with lock_now=true, empty passphrase. */
     fun sendLockNow()
@@ -46,6 +53,10 @@ class LockdownCoordinator(
     @Volatile private var pendingPassphrase: String? = null
     @Volatile private var pendingBoots: Int = LockdownPassphraseStore.DEFAULT_BOOTS
     @Volatile private var pendingHours: Int = 0
+    @Volatile private var pendingMaxSessionSeconds: Int = 0
+
+    /** Set while a client-initiated disable is in flight, so the next DISABLED is expected. */
+    @Volatile private var pendingDisable = false
 
     /**
      * Set when the operator has requested Lock Now and we are waiting for the firmware's
@@ -61,7 +72,9 @@ class LockdownCoordinator(
         pendingPassphrase = null
         pendingBoots = LockdownPassphraseStore.DEFAULT_BOOTS
         pendingHours = 0
+        pendingMaxSessionSeconds = 0
         pendingLockNow = false
+        pendingDisable = false
         _state.value = LockdownState.None
     }
 
@@ -94,6 +107,7 @@ class LockdownCoordinator(
             GeneratedMeshProtos.LockdownStatus.State.LOCKED -> handleLocked(status.lockReason ?: "")
             GeneratedMeshProtos.LockdownStatus.State.UNLOCKED -> handleUnlocked(status)
             GeneratedMeshProtos.LockdownStatus.State.UNLOCK_FAILED -> handleUnlockFailed(status.backoffSeconds)
+            GeneratedMeshProtos.LockdownStatus.State.DISABLED -> handleDisabled()
             GeneratedMeshProtos.LockdownStatus.State.STATE_UNSPECIFIED,
             GeneratedMeshProtos.LockdownStatus.State.UNRECOGNIZED -> {
                 Log.w(TAG, "Ignoring LockdownStatus with unspecified/unknown state")
@@ -118,7 +132,10 @@ class LockdownCoordinator(
                 pendingPassphrase = stored.passphrase
                 pendingBoots = stored.boots
                 pendingHours = stored.hours
-                sender.sendLockdownPassphrase(stored.passphrase, stored.boots, stored.hours)
+                pendingMaxSessionSeconds = stored.maxSessionSeconds
+                sender.sendLockdownPassphrase(
+                    stored.passphrase, stored.boots, stored.hours, stored.maxSessionSeconds
+                )
                 return
             }
         }
@@ -129,7 +146,7 @@ class LockdownCoordinator(
         val address = sender.getDeviceAddress()
         val passphrase = pendingPassphrase
         if (address != null && passphrase != null) {
-            passphraseStore.savePassphrase(address, passphrase, pendingBoots, pendingHours)
+            passphraseStore.savePassphrase(address, passphrase, pendingBoots, pendingHours, pendingMaxSessionSeconds)
             Log.i(TAG, "Saved passphrase for $address")
         }
         pendingPassphrase = null
@@ -139,6 +156,25 @@ class LockdownCoordinator(
             bootsRemaining = status.bootsRemaining,
             validUntilEpoch = status.validUntilEpoch.toLong() and 0xFFFFFFFFL,
         )
+    }
+
+    /**
+     * Lockdown is OFF — either the device was never provisioned, or a disable we requested
+     * just completed. Drop any cached passphrase (a re-enable will set a fresh one) and clear
+     * session state. The UI presents an "Enable lockdown" affordance from here.
+     */
+    private fun handleDisabled() {
+        if (pendingDisable) {
+            Log.i(TAG, "Lockdown disabled (client-initiated)")
+        } else {
+            Log.i(TAG, "Lockdown is not active on this device (capable but disabled)")
+        }
+        pendingDisable = false
+        pendingPassphrase = null
+        wasAutoAttempt = false
+        sender.getDeviceAddress()?.let { passphraseStore.clearPassphrase(it) }
+        _sessionAuthorized.value = false
+        _state.value = LockdownState.Disabled
     }
 
     private fun handleUnlockFailed(backoffSeconds: Int) {
@@ -164,14 +200,30 @@ class LockdownCoordinator(
         }
     }
 
-    /** User-initiated passphrase submission (provision or unlock). */
-    fun submitPassphrase(passphrase: String, boots: Int, hours: Int) {
+    /**
+     * User-initiated passphrase submission. Handles all three of provision (enable lockdown on
+     * an unprovisioned device), unlock (authorize this connection to a locked device), and
+     * re-verify — the firmware decides which based on its own state.
+     */
+    fun submitPassphrase(passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int = 0) {
         pendingPassphrase = passphrase
         pendingBoots = boots
         pendingHours = hours
+        pendingMaxSessionSeconds = maxSessionSeconds
         wasAutoAttempt = false
         _state.value = LockdownState.None // hide dialog while we wait for the response
-        sender.sendLockdownPassphrase(passphrase, boots, hours)
+        sender.sendLockdownPassphrase(passphrase, boots, hours, maxSessionSeconds)
+    }
+
+    /**
+     * User-initiated disable: turn lockdown OFF. Requires the current passphrase; the firmware
+     * decrypts storage back to plaintext and reboots reporting DISABLED. (Does NOT undo the
+     * one-time APPROTECT debug-port burn — the UI must warn about that at enable time.)
+     */
+    fun disableLockdown(passphrase: String) {
+        pendingDisable = true
+        wasAutoAttempt = false
+        sender.sendLockdownDisable(passphrase)
     }
 
     /** User-initiated Lock Now. */

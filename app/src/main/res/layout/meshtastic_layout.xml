@@ -456,6 +456,52 @@
                     </LinearLayout>
                 </ScrollView>
 
+                <!-- Mesh Tab -->
+                <LinearLayout
+                    android:id="@+id/tab_mesh"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Mesh"
+                        android:textSize="18sp"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold"
+                        android:paddingBottom="4dp" />
+
+                    <TextView
+                        android:id="@+id/mesh_summary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Connect to see mesh nodes"
+                        android:textSize="12sp"
+                        android:textColor="#FF88CC88"
+                        android:paddingBottom="8dp" />
+
+                    <ListView
+                        android:id="@+id/mesh_node_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:divider="#FF333333"
+                        android:dividerHeight="1dp"
+                        android:scrollbars="vertical"
+                        android:fadeScrollbars="false" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Bars = SNR quality · grouped by hops from your node"
+                        android:textSize="11sp"
+                        android:textColor="#FF777777"
+                        android:gravity="center"
+                        android:paddingTop="6dp" />
+
+                </LinearLayout>
+
                 <!-- Settings Tab -->
                 <ScrollView
                     android:id="@+id/tab_settings"
@@ -474,6 +520,15 @@
                             android:textSize="18sp"
                             android:textColor="#FFFFFF"
                             android:textStyle="bold"
+                            android:paddingBottom="4dp" />
+
+                        <TextView
+                            android:id="@+id/settings_firmware_info"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Firmware: —"
+                            android:textSize="12sp"
+                            android:textColor="#FF88CC88"
                             android:paddingBottom="16dp" />
 
                         <!-- Channel Security Settings Card -->
@@ -516,7 +571,7 @@
                             <TextView
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:text="Password will be applied to the default channel upon connection"
+                                android:text="Leave blank to keep the existing channel key. Applied via 'Apply to device'."
                                 android:textSize="12sp"
                                 android:textColor="#FF888888"
                                 android:paddingBottom="8dp" />
@@ -527,9 +582,300 @@
                                 android:layout_height="wrap_content"
                                 android:text="Save Password"
                                 android:textColor="#FFFFFF"
-                                android:backgroundTint="#FF0066CC" />
+                                android:backgroundTint="#FF0066CC"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Channel Name (primary)"
+                                android:textSize="14sp"
+                                android:textColor="#FFAAAAAA"
+                                android:paddingBottom="4dp" />
+
+                            <EditText
+                                android:id="@+id/edit_channel_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="Channel name"
+                                android:inputType="text"
+                                android:textColor="#FFFFFF"
+                                android:textColorHint="#FF666666"
+                                android:backgroundTint="#FF666666" />
+
+                            <Switch
+                                android:id="@+id/switch_uplink"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="MQTT uplink enabled"
+                                android:textColor="#FFAAAAAA"
+                                android:paddingTop="8dp" />
+
+                            <Switch
+                                android:id="@+id/switch_downlink"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="MQTT downlink enabled"
+                                android:textColor="#FFAAAAAA"
+                                android:paddingTop="4dp" />
 
                         </LinearLayout>
+
+                        <!-- ============ Device configuration (read from device; push via Apply) ============ -->
+
+                        <!-- Radio / LoRa card -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:background="#FF2A2A2A"
+                            android:padding="12dp"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Radio (LoRa)"
+                                android:textSize="16sp"
+                                android:textColor="#FFFFFF"
+                                android:textStyle="bold"
+                                android:paddingBottom="8dp" />
+
+                            <TextView
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Region" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <Spinner
+                                android:id="@+id/spinner_region"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Modem preset" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <Spinner
+                                android:id="@+id/spinner_modem_preset"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Hop limit (0-7)" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <EditText
+                                android:id="@+id/edit_hop_limit"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <Switch android:id="@+id/switch_use_preset"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Use modem preset" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <Switch android:id="@+id/switch_tx_enabled"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="TX enabled" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                            <Switch android:id="@+id/switch_ignore_mqtt"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Ignore MQTT" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                            <Switch android:id="@+id/switch_override_duty_cycle"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Override duty cycle" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+
+                        </LinearLayout>
+
+                        <!-- Device role card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Device" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Role" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <Spinner android:id="@+id/spinner_role"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Rebroadcast mode" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <Spinner android:id="@+id/spinner_rebroadcast_mode"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Node info broadcast (secs)" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <EditText android:id="@+id/edit_node_info_broadcast_secs"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+                        </LinearLayout>
+
+                        <!-- Position card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Position / GPS" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="GPS mode" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <Spinner android:id="@+id/spinner_gps_mode"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Position broadcast (secs, 0 = off)" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <EditText android:id="@+id/edit_position_broadcast_secs"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="GPS update interval (secs)" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <EditText android:id="@+id/edit_gps_update_interval"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <Switch android:id="@+id/switch_position_smart"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Smart position broadcast" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <Switch android:id="@+id/switch_fixed_position"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Fixed position" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                        </LinearLayout>
+
+                        <!-- Power card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Power" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <Switch android:id="@+id/switch_power_saving"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Power saving" android:textColor="#FFAAAAAA" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="On-battery shutdown after (secs, 0 = never)" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <EditText android:id="@+id/edit_on_battery_shutdown"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Light-sleep (secs)" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <EditText android:id="@+id/edit_ls_secs"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Minimum wake (secs)" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <EditText android:id="@+id/edit_min_wake_secs"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+                        </LinearLayout>
+
+                        <!-- Bluetooth card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Bluetooth" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <Switch android:id="@+id/switch_bt_enabled"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Bluetooth enabled" android:textColor="#FFAAAAAA" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Pairing mode" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <Spinner android:id="@+id/spinner_pairing_mode"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Fixed PIN" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <EditText android:id="@+id/edit_fixed_pin"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Warning: changing Bluetooth can drop this connection." android:textSize="12sp"
+                                android:textColor="#FFCC8888" android:paddingTop="4dp" />
+                        </LinearLayout>
+
+                        <!-- Display card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Display" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Screen on (secs, 0 = always off)" android:textSize="14sp" android:textColor="#FFAAAAAA" />
+                            <EditText android:id="@+id/edit_screen_on_secs"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:inputType="number" android:textColor="#FFFFFF" android:backgroundTint="#FF666666" />
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Display mode" android:textSize="14sp" android:textColor="#FFAAAAAA" android:paddingTop="8dp" />
+                            <Spinner android:id="@+id/spinner_display_mode"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp" />
+
+                            <Switch android:id="@+id/switch_wake_on_tap"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Wake on tap / motion" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                            <Switch android:id="@+id/switch_flip_screen"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Flip screen" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                        </LinearLayout>
+
+                        <!-- Network card -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:background="#FF2A2A2A"
+                            android:padding="12dp" android:layout_marginBottom="8dp">
+
+                            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Network" android:textSize="16sp" android:textColor="#FFFFFF"
+                                android:textStyle="bold" android:paddingBottom="8dp" />
+
+                            <Switch android:id="@+id/switch_wifi_enabled"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="WiFi enabled" android:textColor="#FFAAAAAA" />
+                            <Switch android:id="@+id/switch_eth_enabled"
+                                android:layout_width="match_parent" android:layout_height="wrap_content"
+                                android:text="Ethernet enabled" android:textColor="#FFAAAAAA" android:paddingTop="4dp" />
+                        </LinearLayout>
+
+                        <!-- Apply / reload -->
+                        <LinearLayout
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="horizontal" android:layout_marginBottom="8dp">
+                            <Button android:id="@+id/btn_reload_config"
+                                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                                android:text="Reload from device" android:textColor="#FFFFFF"
+                                android:backgroundTint="#FF555555" android:layout_marginEnd="4dp" />
+                            <Button android:id="@+id/btn_apply_config"
+                                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                                android:text="Apply to device" android:textColor="#FFFFFF"
+                                android:backgroundTint="#FF00994C" android:layout_marginStart="4dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/config_apply_status"
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:text="Connect a device to read and edit its configuration."
+                            android:textSize="12sp" android:textColor="#FF888888"
+                            android:paddingBottom="8dp" />
 
                         <!-- Lockdown (hardened-firmware) controls -->
                         <LinearLayout
@@ -559,12 +905,33 @@
                                 android:paddingBottom="8dp" />
 
                             <Button
+                                android:id="@+id/btn_enable_lockdown"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Enable Lockdown"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#FF00994C"
+                                android:visibility="gone"
+                                android:layout_marginBottom="4dp" />
+
+                            <Button
+                                android:id="@+id/btn_disable_lockdown"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Disable Lockdown"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#FF996600"
+                                android:visibility="gone"
+                                android:layout_marginBottom="4dp" />
+
+                            <Button
                                 android:id="@+id/btn_lock_now"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:text="Lock Now"
                                 android:textColor="#FFFFFF"
-                                android:backgroundTint="#FFCC3333" />
+                                android:backgroundTint="#FFCC3333"
+                                android:visibility="gone" />
 
                         </LinearLayout>
 

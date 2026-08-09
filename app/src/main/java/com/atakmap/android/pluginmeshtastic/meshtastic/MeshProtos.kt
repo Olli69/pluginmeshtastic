@@ -46,7 +46,8 @@ object MeshProtos {
         val channel: Int = 0,
         val wantAck: Boolean = true,
         val hopLimit: Int = 3,
-        val wantResponse: Boolean = false
+        val wantResponse: Boolean = false,
+        val rxRssi: Int = 0
     ) {
         companion object {
             private var packetIdCounter = 0x10000000 +
@@ -261,7 +262,8 @@ object MeshProtos {
                                                 portNum = decoded.portnumValue,
                                                 channel = meshPacket.channel,
                                                 hopLimit = meshPacket.hopLimit,
-                                                wantAck = meshPacket.wantAck
+                                                wantAck = meshPacket.wantAck,
+                                                rxRssi = meshPacket.rxRssi
                                             )
                                         )
                                     }
@@ -286,11 +288,20 @@ object MeshProtos {
                         
                         protoFromRadio.hasNodeInfo() -> {
                             val nodeInfo = protoFromRadio.nodeInfo
+                            val battery = if (nodeInfo.hasDeviceMetrics() &&
+                                    nodeInfo.deviceMetrics.hasBatteryLevel()) {
+                                nodeInfo.deviceMetrics.batteryLevel
+                            } else -1
                             FromRadio(
                                 nodeInfo = NodeInfo(
                                     id = nodeInfo.num.toUInt(),
                                     longName = if (nodeInfo.hasUser()) nodeInfo.user.longName else "",
-                                    shortName = if (nodeInfo.hasUser()) nodeInfo.user.shortName else ""
+                                    shortName = if (nodeInfo.hasUser()) nodeInfo.user.shortName else "",
+                                    snr = nodeInfo.snr,
+                                    hasHops = nodeInfo.hasHopsAway(),
+                                    hopsAway = if (nodeInfo.hasHopsAway()) nodeInfo.hopsAway else -1,
+                                    lastHeard = nodeInfo.lastHeard.toLong() and 0xFFFFFFFFL,
+                                    batteryLevel = battery
                                 )
                             )
                         }
@@ -355,9 +366,18 @@ object MeshProtos {
         val id: UInt,
         val longName: String,
         val shortName: String = id.toString().takeLast(4),
-        val hwModel: String = "UNKNOWN"
-    )
-    
+        val hwModel: String = "UNKNOWN",
+        // Mesh-roster signal/topology fields, harvested from the proto NodeInfo.
+        val snr: Float = 0f,
+        val hasHops: Boolean = false,
+        val hopsAway: Int = -1,        // -1 = unknown (hops_away not reported)
+        val lastHeard: Long = 0L,      // Unix epoch seconds, 0 = never
+        val batteryLevel: Int = -1     // -1 = unknown; >100 = externally powered
+    ) {
+        /** Java-friendly unsigned node number as Long (avoids UInt getter name-mangling). */
+        val nodeNum: Long get() = id.toLong()
+    }
+
     /**
      * Current node information
      */
@@ -365,7 +385,10 @@ object MeshProtos {
         val myNodeNum: UInt,
         val hasGps: Boolean = false,
         val maxChannels: Int = 8
-    )
+    ) {
+        /** Java-friendly unsigned node number as Long. */
+        val nodeNum: Long get() = myNodeNum.toLong()
+    }
     
     /**
      * Helper functions for creating ATAK messages

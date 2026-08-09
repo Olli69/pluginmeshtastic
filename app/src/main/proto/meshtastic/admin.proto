@@ -581,6 +581,34 @@ message LockdownAuth {
    * the locked state. Always honoured regardless of current lock state.
    */
   bool lock_now = 4;
+
+  /*
+   * Optional per-boot uptime cap on the unlocked session, in seconds.
+   * 0 = unlimited (token-only enforcement, suitable for unattended
+   * tower / infrastructure nodes). When non-zero, the firmware arms an
+   * uptime timer at unlock; on each expiry it consumes one boot from the
+   * rollback ledger, revokes per-connection admin auth, and re-engages the
+   * screen lock without rebooting until the boot-count budget is exhausted.
+   * Persisted in the token, so it survives token-based auto-unlock.
+   */
+  uint32 max_session_seconds = 5;
+
+  /*
+   * Disable lockdown mode. Requires a valid passphrase in the same message
+   * (the device must prove the operator owns it before reverting at-rest
+   * encryption). On success the firmware decrypts every stored config /
+   * channel / nodedb file back to plaintext, removes the wrapped DEK, unlock
+   * token, monotonic-counter, and backoff files, and reboots out of lockdown.
+   * This is the inverse of the provision/unlock path — the client app's
+   * "lockdown mode" toggle uses it to return a device to normal operation.
+   *
+   * NOT reversed by this operation: APPROTECT. Once the debug-port lockout has
+   * been burned it is permanent; disabling lockdown decrypts data and removes
+   * the access gates but the SWD/JTAG port stays locked for the life of the
+   * device. When true the passphrase is still required; boots_remaining,
+   * valid_until_epoch, max_session_seconds, and lock_now are ignored.
+   */
+  bool disable = 6;
 }
 
 /*

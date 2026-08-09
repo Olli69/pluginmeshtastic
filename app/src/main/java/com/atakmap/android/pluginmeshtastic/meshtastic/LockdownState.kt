@@ -10,6 +10,13 @@ sealed class LockdownState {
     /** No lockdown signal received yet (default for non-hardened firmware). */
     object None : LockdownState()
 
+    /**
+     * Firmware is lockdown-capable but lockdown is currently OFF (not provisioned,
+     * or just disabled). The operator can enable it from here. Reported as
+     * LockdownStatus.State.DISABLED.
+     */
+    object Disabled : LockdownState()
+
     /** First-boot device with no passphrase set — prompt operator to pick one. */
     object NeedsProvision : LockdownState()
 

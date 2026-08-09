@@ -73,6 +73,11 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     
     // Node database
     private val nodeDatabase = ConcurrentHashMap<String, MeshProtos.NodeInfo>()
+
+    // Per-node last-heard receive RSSI (dBm), keyed by node number. NodeInfo carries SNR but not
+    // RSSI; we harvest rx_rssi off inbound packets so the Mesh roster can show both. Only packets
+    // that actually reached us directly carry a meaningful rx_rssi (0 = not measured / relayed).
+    private val nodeRssi = ConcurrentHashMap<Long, Int>()
     private var myNodeInfo: MeshProtos.MyNodeInfo? = null
     private var deviceMetadata: com.geeksville.mesh.MeshProtos.DeviceMetadata? = null
     private var currentDeviceMetrics: TelemetryProtos.DeviceMetrics? = null
@@ -194,8 +199,11 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     // Lockdown coordinator — drives the passphrase / Lock Now flows when the connected
     // device runs a MESHTASTIC_LOCKDOWN-hardened firmware build.
     private val lockdownSender = object : LockdownSender {
-        override fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
-            this@MeshtasticManager.sendLockdownPassphrase(passphrase, boots, hours)
+        override fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int) {
+            this@MeshtasticManager.sendLockdownPassphrase(passphrase, boots, hours, maxSessionSeconds)
+        }
+        override fun sendLockdownDisable(passphrase: String) {
+            this@MeshtasticManager.sendLockdownDisable(passphrase)
         }
         override fun sendLockNow() {
             this@MeshtasticManager.sendLockNow()
@@ -360,6 +368,7 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
         
         setConnectionState(ConnectionState.DISCONNECTED)
         nodeDatabase.clear()
+        nodeRssi.clear()
         // Don't clear myNodeInfo on disconnect - it should persist as device identity
         // myNodeInfo = null // REMOVED - keep the device identity info
     }
@@ -877,6 +886,9 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     fun getNodes(): List<MeshProtos.NodeInfo> {
         return nodeDatabase.values.toList()
     }
+
+    /** Last directly-measured RSSI (dBm) for a node number, or null if never heard directly. */
+    fun getNodeRssi(nodeNum: Long): Int? = nodeRssi[nodeNum]
     
     /**
      * Get current node info
@@ -965,6 +977,44 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
      */
     fun getLoraConfig(): com.geeksville.mesh.ConfigProtos.Config.LoRaConfig? {
         return loraConfig
+    }
+
+    // Accessors for the rest of the cached device config. These are populated from the
+    // initial wantConfig handshake (parseAndStoreConfig) and are what the Settings UI reads
+    // so it can reflect the device's actual current configuration.
+    fun getDeviceConfig(): com.geeksville.mesh.ConfigProtos.Config.DeviceConfig? = deviceConfig
+    fun getPositionConfig(): com.geeksville.mesh.ConfigProtos.Config.PositionConfig? = positionConfig
+    fun getPowerConfig(): com.geeksville.mesh.ConfigProtos.Config.PowerConfig? = powerConfig
+    fun getNetworkConfig(): com.geeksville.mesh.ConfigProtos.Config.NetworkConfig? = networkConfig
+    fun getDisplayConfig(): com.geeksville.mesh.ConfigProtos.Config.DisplayConfig? = displayConfig
+    fun getBluetoothConfig(): com.geeksville.mesh.ConfigProtos.Config.BluetoothConfig? = bluetoothConfig
+
+    /** Primary channel (index 0) as reported by the device, or null if not yet received. */
+    fun getPrimaryChannel(): com.geeksville.mesh.ChannelProtos.Channel? = channelDatabase[0]
+
+    /**
+     * Push user-edited configuration to the device. Delegates to the config manager, which
+     * diffs each section against the device's current config and only sends what changed.
+     */
+    fun applyUserConfig(
+        newConfig: com.geeksville.mesh.ConfigProtos.Config,
+        applyChannel: Boolean,
+        channelName: String,
+        channelPassword: String,
+        uplinkEnabled: Boolean,
+        downlinkEnabled: Boolean,
+        callback: (Boolean) -> Unit
+    ) {
+        val mgr = configManager
+        if (connectionState.value != ConnectionState.CONFIGURED || mgr == null) {
+            Log.w(TAG, "Cannot apply user config - device not configured")
+            callback(false)
+            return
+        }
+        mgr.applyUserConfig(
+            newConfig, applyChannel, channelName, channelPassword,
+            uplinkEnabled, downlinkEnabled, callback
+        )
     }
     
     /**
@@ -1283,6 +1333,14 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
             fromRadio.packet != null -> {
                 val packet = fromRadio.packet
                 messagesReceived++
+
+                // Harvest per-node RSSI from directly-received packets (rx_rssi == 0 when the
+                // packet was relayed or the radio didn't measure it).
+                val rxRssi = packet.rxRssi
+                val fromNum = packet.from
+                if (rxRssi != 0 && fromNum != null) {
+                    nodeRssi[fromNum.toLong() and 0xFFFFFFFFL] = rxRssi
+                }
                 Log.d(TAG, "Received packet - Port: ${packet.portNum}, From: ${packet.from?.let { "0x${it.toLong().and(0xFFFFFFFFL).toString(16)}" } ?: "null"}")
                 
                 // Filter for ATAK ports, admin messages, telemetry, and routing messages
@@ -1374,7 +1432,9 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
                 if (_connectionState.value == ConnectionState.CONNECTED) {
                     Log.i(TAG, "Radio is ready (received myInfo), device configured")
                     radioReadyTimeoutJob?.cancel() // Cancel timeout since we got myInfo
-                    configManager?.analyzeTakConfigurationNeeds()
+                    // NOTE: we intentionally do NOT auto-apply any profile here. The device's
+                    // existing configuration is left untouched; the Settings tab reads it and the
+                    // user pushes changes explicitly via "Apply to device".
                     _connectionState.value = ConnectionState.CONFIGURED
                 }
             }
@@ -1522,22 +1582,6 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     }
     
     /**
-     * Apply TAK optimized configuration to the device
-     */
-    fun applyTakOptimizedConfiguration(callback: (Boolean) -> Unit) {
-        if (connectionState.value != ConnectionState.CONFIGURED || configManager == null) {
-            Log.w(TAG, "Cannot apply TAK configuration - device not configured")
-            callback(false)
-            return
-        }
-        
-        Log.i(TAG, "Applying TAK optimized configuration")
-        configManager?.applyTakConfiguration { success ->
-            callback(success)
-        } ?: callback(false)
-    }
-    
-    /**
      * Get current device configuration for display
      */
     fun getCurrentDeviceConfiguration(callback: (String?) -> Unit) {
@@ -1647,7 +1691,7 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
     //   - decoded payload (not encrypted)
     //   - pki_encrypted == false               (firmware drops PKI-encrypted ToRadio while locked)
     //   - hop_limit / hop_start == 7, priority == RELIABLE
-    fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int) {
+    fun sendLockdownPassphrase(passphrase: String, boots: Int, hours: Int, maxSessionSeconds: Int) {
         val myNum = myNodeInfo?.myNodeNum?.toInt()
         if (myNum == null) {
             Log.w(TAG, "Cannot send lockdown passphrase: myNodeInfo not yet received")
@@ -1663,12 +1707,30 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
             .setPassphrase(ByteString.copyFrom(passphrase.toByteArray(Charsets.UTF_8)))
             .setBootsRemaining(boots.coerceAtLeast(0))
             .setValidUntilEpoch(validUntilEpoch)
+            .setMaxSessionSeconds(maxSessionSeconds.coerceAtLeast(0))
             .setLockNow(false)
             .build()
         val adminMsg = AdminProtos.AdminMessage.newBuilder()
             .setLockdownAuth(lockdownAuth)
             .build()
         sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "passphrase")
+    }
+
+    /** Turn lockdown OFF: LockdownAuth{passphrase, disable=true}. Passphrase must be valid. */
+    fun sendLockdownDisable(passphrase: String) {
+        val myNum = myNodeInfo?.myNodeNum?.toInt()
+        if (myNum == null) {
+            Log.w(TAG, "Cannot send lockdown disable: myNodeInfo not yet received")
+            return
+        }
+        val lockdownAuth = AdminProtos.LockdownAuth.newBuilder()
+            .setPassphrase(ByteString.copyFrom(passphrase.toByteArray(Charsets.UTF_8)))
+            .setDisable(true)
+            .build()
+        val adminMsg = AdminProtos.AdminMessage.newBuilder()
+            .setLockdownAuth(lockdownAuth)
+            .build()
+        sendLockdownAdmin(myNum, adminMsg.toByteArray(), label = "disable")
     }
 
     fun sendLockNow() {

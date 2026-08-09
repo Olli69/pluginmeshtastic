@@ -65,14 +65,6 @@ class MeshtasticConfigManager(
     private var currentDeviceMetadata: GeeksvilleMeshProtos.DeviceMetadata? = null
     private var deviceMetadataRequestTime: Long = 0
 
-    // Track configs that need to be sent after device reboot
-    data class PostRebootConfigs(
-        val needsBluetoothConfig: Boolean,
-        val needsDisplayConfig: Boolean,
-        val needsNetworkConfig: Boolean
-    )
-    private var pendingPostRebootConfigs: PostRebootConfigs? = null
-    
     enum class ConfigurationState {
         UNCONFIGURED,
         RETRIEVING,
@@ -122,16 +114,8 @@ class MeshtasticConfigManager(
                 }
                 ConfigurationState.UNCONFIGURED -> {
                     // This can happen if we reconnected before config started
-                    Log.i(TAG, "Received config complete while unconfigured")
-
-                    // Check if we have pending post-reboot configs to send
-                    if (pendingPostRebootConfigs != null) {
-                        Log.i(TAG, "Device rebooted - sending remaining configs")
-                        sendPostRebootConfigs()
-                    } else {
-                        Log.i(TAG, "Reading existing configuration")
-                        readExistingConfiguration()
-                    }
+                    Log.i(TAG, "Received config complete while unconfigured - reading existing configuration")
+                    readExistingConfiguration()
                 }
                 else -> {
                     Log.w(TAG, "Received config complete in unexpected state: ${_configState.value}")
@@ -417,50 +401,6 @@ class MeshtasticConfigManager(
     }
 
     /**
-     * Configure primary channel with password if available
-     */
-    private fun configureTakChannel() {
-        // Check if we have a saved password from the UI
-        val password = getCurrentChannelPassword()
-        Log.d(TAG, "configureTakChannel: password=${if (password.isNullOrEmpty()) "null/empty" else "***set***"}")
-        if (password.isNullOrEmpty()) {
-            Log.i(TAG, "No channel password set, using default PSK")
-            return
-        }
-        
-        Log.i(TAG, "Configuring channel with custom PSK (${password.length} characters)")
-        
-        // Generate PSK from password
-        val psk = generatePskFromPassword(password)
-        
-        // Create channel settings
-        val channelSettings = ChannelProtos.ChannelSettings.newBuilder()
-            .setPsk(ByteString.copyFrom(psk))
-            .setName("TAK")
-            .setId(Random.nextInt())
-            .setUplinkEnabled(false)  // Disable uplink for security
-            .setDownlinkEnabled(false)  // Disable downlink for security
-            .build()
-        
-        // Create channel configuration (Primary channel = index 0)
-        val channel = ChannelProtos.Channel.newBuilder()
-            .setIndex(0)  // Primary channel
-            .setSettings(channelSettings)
-            .setRole(ChannelProtos.Channel.Role.PRIMARY)
-            .build()
-        
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            sessionKey?.let { sessionPasskey = it }
-            setChannel = channel
-        }.build()
-
-        sendAdminMessage(adminMsg, needsAck = true)
-        Log.i(TAG, "Channel config sent: PSK=${psk}, Name=TAK, Role=PRIMARY")
-    }
-
-    
-    
-    /**
      * Handle admin message response from device
      */
     fun handleAdminResponse(adminMessage: AdminProtos.AdminMessage) {
@@ -652,538 +592,121 @@ class MeshtasticConfigManager(
         Log.i(TAG, "=====================")
     }
 
-    /**
-     * Analyze what needs to be changed for TAK optimization
-     */
-    fun analyzeTakConfigurationNeeds() {
-        Log.i(TAG, "Analyzing current configuration for TAK optimization")
 
-        
-        val changes = mutableListOf<String>()
-        var needsDeviceConfig = false
-        var needsLoraConfig = false
-        var needsPositionConfig = false
-        var needsPowerConfig = false
-        var needsBluetoothConfig = false
-        var needsDisplayConfig = false
-        var needsNetworkConfig = false
-        var needsModuleChanges = false
-        
-        currentDeviceConfig?.let { config ->
-            // Check device config
-            if (config.hasDevice()) {
-                val device = config.device
-                if (device.role != ConfigProtos.Config.DeviceConfig.Role.TAK ||
-                    device.rebroadcastMode != ConfigProtos.Config.DeviceConfig.RebroadcastMode.LOCAL_ONLY) {
-                    needsDeviceConfig = true
-                    changes.add("Device settings")
-                }
-            } else {
-                Log.i(TAG, "Device config missing entirely")
-                needsDeviceConfig = true
-                changes.add("Device settings")
-            }
-            
-            // Check LoRa config
-            if (config.hasLora()) {
-                val lora = config.lora
-                if (!lora.usePreset ||
-                    lora.modemPreset != ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_FAST ||
-                    lora.region != ConfigProtos.Config.LoRaConfig.RegionCode.US ||
-                    !lora.txEnabled ||
-                    lora.hopLimit != 6) {
-                    needsLoraConfig = true
-                    changes.add("LoRa settings")
-                }
-            } else {
-                Log.i(TAG, "LoRa config missing entirely")
-                needsLoraConfig = true
-                changes.add("LoRa settings")
-            }
-
-            // Check position config
-            if (config.hasPosition()) {
-                val position = config.position
-                if (position.positionBroadcastSecs != 0 ||
-                    position.positionBroadcastSmartEnabled ||
-                    position.gpsEnabled ||
-                    position.fixedPosition ||
-                    position.positionFlags != 0 ||
-                    position.gpsUpdateInterval != 0) {
-                    needsPositionConfig = true
-                    changes.add("Position settings")
-                }
-            } else {
-                Log.i(TAG, "Position config missing entirely")
-                needsPositionConfig = true
-                changes.add("Position settings")
-            }
-
-            // Check other configs as needed...
-        } ?: run {
-            // No config received, need to set everything
-            needsDeviceConfig = true
-            needsLoraConfig = true
-            needsPositionConfig = true
-            needsPowerConfig = true
-            needsBluetoothConfig = true
-            needsDisplayConfig = true
-            needsNetworkConfig = true
-            changes.add("All device settings (no existing config)")
-        }
-
-        // Check module configs
-        currentModuleConfigs.forEach { (key, moduleConfig) ->
-            when {
-                key.contains("mqtt") && moduleConfig.hasMqtt() -> {
-                    if (moduleConfig.mqtt.enabled || moduleConfig.mqtt.mapReportingEnabled) {
-                        needsModuleChanges = true
-                        changes.add("MQTT module")
-                    }
-                }
-                key.contains("telemetry") && moduleConfig.hasTelemetry() -> {
-                    if (moduleConfig.telemetry.deviceUpdateInterval != 0 ||
-                        moduleConfig.telemetry.environmentUpdateInterval != 0) {
-                        needsModuleChanges = true
-                        changes.add("Telemetry module")
-                    }
-                }
-            }
-        }
-
-        needsPositionConfig = false
-        needsPowerConfig = false
-        needsBluetoothConfig = false
-        needsDisplayConfig = false
-        needsNetworkConfig = false
-        if (changes.isEmpty()) {
-            Log.i(TAG, "Device is already TAK-optimized, no changes needed")
-            _configState.value = ConfigurationState.CONFIGURED
-        } else {
-            Log.i(TAG, "TAK optimization needed for: ${changes.joinToString(", ")}")
-            startSelectiveTakConfiguration(
-                needsDeviceConfig, needsLoraConfig, needsPositionConfig,
-                needsPowerConfig, needsBluetoothConfig, needsDisplayConfig,
-                needsNetworkConfig, needsModuleChanges
-            )
-        }
-    }
-
-    /**
-     * Start selective TAK configuration, only changing settings that need to be updated
-     */
-    private fun startSelectiveTakConfiguration(
-        needsDeviceConfig: Boolean,
-        needsLoraConfig: Boolean,
-        needsPositionConfig: Boolean,
-        needsPowerConfig: Boolean,
-        needsBluetoothConfig: Boolean,
-        needsDisplayConfig: Boolean,
-        needsNetworkConfig: Boolean,
-        needsModuleChanges: Boolean
+    // ---------------------------------------------------------------------------------------
+    // User-driven configuration apply
+    //
+    // The device's existing config is read during the wantConfig handshake and cached by
+    // MeshtasticManager. The Settings UI builds a candidate Config (each section derived from the
+    // device's current section plus the user's edits) and calls applyUserConfig(). We diff each
+    // section against the cached value and send SET_CONFIG only for sections that changed,
+    // least-disruptive first so a device/power change that reboots the radio happens last.
+    // ---------------------------------------------------------------------------------------
+    fun applyUserConfig(
+        newConfig: ConfigProtos.Config,
+        applyChannel: Boolean,
+        channelName: String,
+        channelPassword: String,
+        uplinkEnabled: Boolean,
+        downlinkEnabled: Boolean,
+        callback: (Boolean) -> Unit
     ) {
-        Log.i(TAG, "Starting selective TAK configuration")
-        _configState.value = ConfigurationState.CONFIGURING
-
         scope.launch {
+            var ok = true
             try {
-                Log.i(TAG, "Applying selective configuration changes using sendAdminMessage...")
-
-                // Only send configuration changes for settings that need updating
-                if (needsDeviceConfig || needsLoraConfig || needsPositionConfig ||
-                    needsPowerConfig || needsBluetoothConfig || needsDisplayConfig || needsNetworkConfig) {
-
-                    Log.i(TAG, "Sending selective device configuration...")
-                    sendSelectiveDeviceConfiguration(
-                        needsDeviceConfig, needsLoraConfig, needsPositionConfig,
-                        needsPowerConfig, needsBluetoothConfig, needsDisplayConfig, needsNetworkConfig
-                    )
+                // LoRa (region / modem preset / hop limit / etc) — safe, rarely reboots.
+                if (newConfig.hasLora() && newConfig.lora != meshtasticManager.getLoraConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setLora(newConfig.lora).build(), "LoRa") && ok
                 }
-
-                // Handle module configuration changes
-                if (needsModuleChanges) {
-                    Log.i(TAG, "Applying selective module configuration changes...")
-                    disableNonEssentialModulesSelectively()
+                // Channel (name / PSK / uplink / downlink).
+                if (applyChannel) {
+                    ok = sendChannelConfig(channelName, channelPassword, uplinkEnabled, downlinkEnabled) && ok
                 }
-
-                // Check if we have pending post-reboot configs
-                if (pendingPostRebootConfigs != null) {
-                    Log.i(TAG, "Configuration phase 1 complete - waiting for device reboot")
-                    // Don't mark as configured yet - wait for post-reboot configs
-                } else {
-                    // Configure channel (only if no reboot expected)
-                    configureTakChannel()
-                    _configState.value = ConfigurationState.CONFIGURED
-                    Log.i(TAG, "Selective TAK configuration complete")
+                // Position.
+                if (newConfig.hasPosition() && newConfig.position != meshtasticManager.getPositionConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setPosition(newConfig.position).build(), "Position") && ok
                 }
-
+                // Display.
+                if (newConfig.hasDisplay() && newConfig.display != meshtasticManager.getDisplayConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setDisplay(newConfig.display).build(), "Display") && ok
+                }
+                // Network.
+                if (newConfig.hasNetwork() && newConfig.network != meshtasticManager.getNetworkConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setNetwork(newConfig.network).build(), "Network") && ok
+                }
+                // Bluetooth — changing this can drop the BLE link, so do it near the end.
+                if (newConfig.hasBluetooth() && newConfig.bluetooth != meshtasticManager.getBluetoothConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setBluetooth(newConfig.bluetooth).build(), "Bluetooth") && ok
+                }
+                // Power — may reboot.
+                if (newConfig.hasPower() && newConfig.power != meshtasticManager.getPowerConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setPower(newConfig.power).build(), "Power") && ok
+                }
+                // Device (role / rebroadcast) — most likely to reboot, so last.
+                if (newConfig.hasDevice() && newConfig.device != meshtasticManager.getDeviceConfig()) {
+                    ok = sendConfigSection(ConfigProtos.Config.newBuilder().setDevice(newConfig.device).build(), "Device") && ok
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Selective configuration failed", e)
-                _configState.value = ConfigurationState.ERROR
+                Log.e(TAG, "applyUserConfig failed", e)
+                ok = false
             }
+            withContext(Dispatchers.Main) { callback(ok) }
         }
     }
 
-    /**
-     * Send individual admin packets for each configuration type that needs to be changed
-     * Split into phases to handle device reboots from critical config changes
-     */
-    private suspend fun sendSelectiveDeviceConfiguration(
-        needsDeviceConfig: Boolean,
-        needsLoraConfig: Boolean,
-        needsPositionConfig: Boolean,
-        needsPowerConfig: Boolean,
-        needsBluetoothConfig: Boolean,
-        needsDisplayConfig: Boolean,
-        needsNetworkConfig: Boolean
-    ) {
-        Log.i(TAG, "Sending individual admin packets for each config type")
-
-        // Phase 1: Send critical configs that may trigger reboot (Device, Power)
-        var needsReboot = false
-
-        if (needsDeviceConfig) {
-            Log.i(TAG, "Phase 1: Sending device config (may trigger reboot)")
-            val devicePacketId = sendDeviceConfig()
-            if (devicePacketId != null) {
-                Log.i(TAG, "Waiting for device config ACK (packet $devicePacketId)...")
-                val result = waitForAck(devicePacketId, 15000) // Longer timeout for device config
-                if (!result.success) {
-                    Log.w(TAG, "Device config failed: ${result.errorReason}")
-                } else if (result.isRetry) {
-                    Log.i(TAG, "Device config succeeded on retry")
-                }
-            }
-            needsReboot = true
-        }
-
-        Log.i(TAG, "Waiting 15 seconds after critical config changes to allow device to process...")
-        delay(15000)
-
-        if (needsPowerConfig) {
-            Log.i(TAG, "Phase 1: Sending power config (may trigger reboot)")
-            val powerPacketId = sendPowerConfig()
-            if (powerPacketId != null) {
-                Log.i(TAG, "Waiting for power config ACK (packet $powerPacketId)...")
-                waitForAck(powerPacketId, 15000) // Longer timeout for power config
-            }
-            needsReboot = true
-        }
-
-        // Phase 2: Send radio configs that usually don't trigger reboot
-        if (needsLoraConfig) {
-            Log.i(TAG, "Phase 2: Sending LoRa config")
-            val loraPacketId = sendLoraConfig()
-            if (loraPacketId != null) {
-                Log.i(TAG, "Waiting for LoRa config ACK (packet $loraPacketId)...")
-                val result = waitForAck(loraPacketId, 15000)
-                if (!result.success) {
-                    Log.w(TAG, "LoRa config failed: ${result.errorReason}")
-                } else if (result.isRetry) {
-                    Log.i(TAG, "LoRa config succeeded on retry")
-                }
-            }
-        }
-
-        if (needsPositionConfig) {
-            Log.i(TAG, "Phase 2: Sending position config")
-            val positionPacketId = sendPositionConfig()
-            if (positionPacketId != null) {
-                Log.i(TAG, "Waiting for position config ACK (packet $positionPacketId)...")
-                waitForAck(positionPacketId)
-            }
-        }
-
-        // Phase 3: Mark that remaining configs need to be sent after potential reboot
-        if (needsBluetoothConfig || needsDisplayConfig || needsNetworkConfig) {
-            Log.i(TAG, "Phase 3: Deferring Bluetooth/Display/Network configs until after reboot")
-            // Store these for after reboot
-            pendingPostRebootConfigs = PostRebootConfigs(
-                needsBluetoothConfig,
-                needsDisplayConfig,
-                needsNetworkConfig
-            )
-        }
-
-        if (needsReboot) {
-            Log.i(TAG, "Critical configs sent - device will likely reboot. Remaining configs deferred.")
-        } else {
-            Log.i(TAG, "All individual config packets sent")
-        }
-    }
-
-    /**
-     * Send device configuration as individual admin packet
-     */
-    private fun sendDeviceConfig(): UInt? {
-        Log.i(TAG, "Sending device config packet")
-        val deviceConfig = ConfigProtos.Config.DeviceConfig.newBuilder()
-            .setRole(ConfigProtos.Config.DeviceConfig.Role.TAK)
-            .setRebroadcastMode(ConfigProtos.Config.DeviceConfig.RebroadcastMode.LOCAL_ONLY)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setDevice(deviceConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            //sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send LoRa configuration as individual admin packet
-     */
-    private fun sendLoraConfig(): UInt? {
-        Log.i(TAG, "Sending LoRa config packet")
-        val loraConfig = ConfigProtos.Config.LoRaConfig.newBuilder()
-            .setModemPreset(ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_FAST)
-            .setHopLimit(6)
-            .setTxEnabled(true)
-            .setUsePreset(true)
-            .setIgnoreMqtt(true)
-            .setConfigOkToMqtt(false)
-            .setOverrideDutyCycle(true)
-            .setRegion(ConfigProtos.Config.LoRaConfig.RegionCode.US)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setLora(loraConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            //sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send position configuration as individual admin packet
-     */
-    private fun sendPositionConfig(): UInt? {
-        Log.i(TAG, "Sending position config packet")
-        val positionConfig = ConfigProtos.Config.PositionConfig.newBuilder()
-            .setPositionBroadcastSecs(0)
-            .setPositionBroadcastSmartEnabled(false)
-            .setFixedPosition(false)
-            .setPositionFlags(0)
-            .setGpsUpdateInterval(0)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setPosition(positionConfig).build()
+    /** Send a single-section Config as a SET_CONFIG admin message and wait for its ACK. */
+    private suspend fun sendConfigSection(config: ConfigProtos.Config, label: String): Boolean {
+        Log.i(TAG, "Applying $label config")
         val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
             sessionKey?.let { sessionPasskey = it }
             setConfig = config
         }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send power configuration as individual admin packet
-     */
-    private fun sendPowerConfig(): UInt? {
-        Log.i(TAG, "Sending power config packet")
-        val powerConfig = ConfigProtos.Config.PowerConfig.newBuilder()
-            .setIsPowerSaving(true)
-            .setOnBatteryShutdownAfterSecs(0)
-            .setLsSecs(300)
-            .setMinWakeSecs(10)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setPower(powerConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send Bluetooth configuration as individual admin packet
-     */
-    private fun sendBluetoothConfig(): UInt? {
-        Log.i(TAG, "Sending Bluetooth config packet")
-        val bluetoothConfig = ConfigProtos.Config.BluetoothConfig.newBuilder()
-            .setEnabled(true)
-            .setMode(ConfigProtos.Config.BluetoothConfig.PairingMode.NO_PIN)
-            .setFixedPin(0)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setBluetooth(bluetoothConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send display configuration as individual admin packet
-     */
-    private fun sendDisplayConfig(): UInt? {
-        Log.i(TAG, "Sending display config packet")
-        val displayConfig = ConfigProtos.Config.DisplayConfig.newBuilder()
-            .setScreenOnSecs(0)
-            .setWakeOnTapOrMotion(false)
-            .setFlipScreen(false)
-            .setDisplaymode(ConfigProtos.Config.DisplayConfig.DisplayMode.DEFAULT)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setDisplay(displayConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send network configuration as individual admin packet
-     */
-    private fun sendNetworkConfig(): UInt? {
-        Log.i(TAG, "Sending network config packet")
-        val networkConfig = ConfigProtos.Config.NetworkConfig.newBuilder()
-            .setWifiEnabled(false)
-            .setEthEnabled(false)
-            .build()
-
-        val config = ConfigProtos.Config.newBuilder().setNetwork(networkConfig).build()
-        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-            sessionKey?.let { sessionPasskey = it }
-            setConfig = config
-        }.build()
-
-        return sendAdminMessage(adminMsg, needsAck = true)
-    }
-
-    /**
-     * Send configs that were deferred due to device reboot
-     */
-    private fun sendPostRebootConfigs() {
-        val configs = pendingPostRebootConfigs ?: return
-        Log.i(TAG, "Sending post-reboot configs: BT=${configs.needsBluetoothConfig}, Display=${configs.needsDisplayConfig}, Network=${configs.needsNetworkConfig}")
-
-        scope.launch {
-            try {
-                if (configs.needsBluetoothConfig) {
-                    Log.i(TAG, "Post-reboot: Sending Bluetooth config")
-                    val bluetoothPacketId = sendBluetoothConfig()
-                    if (bluetoothPacketId != null) {
-                        Log.i(TAG, "Waiting for Bluetooth config ACK (packet $bluetoothPacketId)...")
-                        val result = waitForAck(bluetoothPacketId)
-                        if (!result.success) {
-                            Log.w(TAG, "Bluetooth config failed: ${result.errorReason}")
-                        } else if (result.isRetry) {
-                            Log.i(TAG, "Bluetooth config succeeded on retry")
-                        }
-                    }
-                }
-
-                if (configs.needsDisplayConfig) {
-                    Log.i(TAG, "Post-reboot: Sending display config")
-                    val displayPacketId = sendDisplayConfig()
-                    if (displayPacketId != null) {
-                        Log.i(TAG, "Waiting for display config ACK (packet $displayPacketId)...")
-                        val result = waitForAck(displayPacketId)
-                        if (!result.success) {
-                            Log.w(TAG, "Display config failed: ${result.errorReason}")
-                        } else if (result.isRetry) {
-                            Log.i(TAG, "Display config succeeded on retry")
-                        }
-                    }
-                }
-
-                if (configs.needsNetworkConfig) {
-                    Log.i(TAG, "Post-reboot: Sending network config")
-                    val networkPacketId = sendNetworkConfig()
-                    if (networkPacketId != null) {
-                        Log.i(TAG, "Waiting for network config ACK (packet $networkPacketId)...")
-                        val result = waitForAck(networkPacketId)
-                        if (!result.success) {
-                            Log.w(TAG, "Network config failed: ${result.errorReason}")
-                        } else if (result.isRetry) {
-                            Log.i(TAG, "Network config succeeded on retry")
-                        }
-                    }
-                }
-
-                // Configure channel (always last)
-                Log.i(TAG, "Post-reboot: Configuring channel")
-                configureTakChannel()
-
-                // Clear pending configs and mark complete
-                pendingPostRebootConfigs = null
-                _configState.value = ConfigurationState.CONFIGURED
-                Log.i(TAG, "Post-reboot configuration complete")
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Post-reboot configuration failed", e)
-                _configState.value = ConfigurationState.ERROR
-            }
+        val packetId = sendAdminMessage(adminMsg, needsAck = true)
+        if (packetId == null) {
+            Log.w(TAG, "$label config not sent (no node id / send failure)")
+            return false
         }
+        val result = waitForAck(packetId, 15000)
+        if (!result.success) Log.w(TAG, "$label config failed: ${result.errorReason}")
+        // Give the device a moment in case the change triggers a reboot before the next section.
+        delay(1500)
+        return result.success
     }
 
     /**
-     * Disable only modules that are currently enabled and need to be disabled
+     * Configure the primary channel (index 0). Uses the device's current primary channel as a
+     * base so unspecified fields (and the existing PSK when no new password is given) are kept.
      */
-    private fun disableNonEssentialModulesSelectively() {
-        scope.launch {
-            // Check MQTT module
-            currentModuleConfigs["mqtt"]?.let { moduleConfig ->
-                if (moduleConfig.hasMqtt() &&
-                    (moduleConfig.mqtt.enabled || moduleConfig.mqtt.mapReportingEnabled)) {
-
-                    Log.i(TAG, "Disabling MQTT module")
-                    val mqttConfig = ModuleConfigProtos.ModuleConfig.MQTTConfig.newBuilder()
-                        .setEnabled(false)
-                        .setMapReportingEnabled(false)
-                        .build()
-
-                    val mqttModuleConfig = ModuleConfigProtos.ModuleConfig.newBuilder()
-                        .setMqtt(mqttConfig)
-                        .build()
-
-                    val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-                        sessionKey?.let { sessionPasskey = it }
-                        setModuleConfig = mqttModuleConfig
-                    }.build()
-
-                    sendAdminMessage(adminMsg, needsAck = true)
-                    delay(100)
-                }
-            }
-
-            // Check Telemetry module
-            currentModuleConfigs["telemetry"]?.let { moduleConfig ->
-                if (moduleConfig.hasTelemetry() &&
-                    (moduleConfig.telemetry.deviceUpdateInterval != 0 ||
-                     moduleConfig.telemetry.environmentUpdateInterval != 0)) {
-
-                    Log.i(TAG, "Disabling telemetry broadcasts")
-                    val telemetryConfig = ModuleConfigProtos.ModuleConfig.TelemetryConfig.newBuilder()
-                        .setDeviceUpdateInterval(0)
-                        .setEnvironmentUpdateInterval(0)
-                        .build()
-
-                    val telemetryModuleConfig = ModuleConfigProtos.ModuleConfig.newBuilder()
-                        .setTelemetry(telemetryConfig)
-                        .build()
-
-                    val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
-                        sessionKey?.let { sessionPasskey = it }
-                        setModuleConfig = telemetryModuleConfig
-                    }.build()
-
-                    sendAdminMessage(adminMsg, needsAck = true)
-                    delay(100)
-                }
-            }
-
-            Log.i(TAG, "Selective module configuration complete")
+    private suspend fun sendChannelConfig(
+        name: String,
+        password: String,
+        uplinkEnabled: Boolean,
+        downlinkEnabled: Boolean
+    ): Boolean {
+        Log.i(TAG, "Applying channel config (name='$name', psk=${if (password.isEmpty()) "unchanged" else "updated"})")
+        val current = meshtasticManager.getPrimaryChannel()
+        val settingsBuilder = current?.settings?.toBuilder()
+            ?: ChannelProtos.ChannelSettings.newBuilder()
+        settingsBuilder.name = name
+        settingsBuilder.uplinkEnabled = uplinkEnabled
+        settingsBuilder.downlinkEnabled = downlinkEnabled
+        if (password.isNotEmpty()) {
+            settingsBuilder.psk = ByteString.copyFrom(generatePskFromPassword(password))
         }
+        val channel = ChannelProtos.Channel.newBuilder()
+            .setIndex(0)
+            .setSettings(settingsBuilder.build())
+            .setRole(ChannelProtos.Channel.Role.PRIMARY)
+            .build()
+        val adminMsg = AdminProtos.AdminMessage.newBuilder().apply {
+            sessionKey?.let { sessionPasskey = it }
+            setChannel = channel
+        }.build()
+        val packetId = sendAdminMessage(adminMsg, needsAck = true) ?: return false
+        val result = waitForAck(packetId, 15000)
+        if (!result.success) Log.w(TAG, "Channel config failed: ${result.errorReason}")
+        delay(1000)
+        return result.success
     }
 
     /**
@@ -1216,32 +739,6 @@ class MeshtasticConfigManager(
 
         // Send via MeshtasticManager
         meshtasticManager.sendToRadio(toRadio)
-    }
-
-    /**
-     * Apply TAK configuration with callback
-     */
-    fun applyTakConfiguration(callback: (Boolean) -> Unit) {
-        scope.launch {
-            try {
-                Log.i(TAG, "Starting TAK configuration")
-
-                // Start the TAK configuration process
-                startConfiguration()
-
-                // Wait for the configuration to complete
-                delay(5000)
-
-                withContext(Dispatchers.Main) {
-                    callback(true)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to apply TAK configuration", e)
-                withContext(Dispatchers.Main) {
-                    callback(false)
-                }
-            }
-        }
     }
 
     /**
@@ -1324,30 +821,6 @@ class MeshtasticConfigManager(
         requestDeviceMetadata()
     }
 
-    /**
-     * Get configuration summary
-     */
-    fun getConfigurationSummary(): String {
-        return """
-        TAK Configuration Applied:
-        - Role: TAK
-        - Rebroadcast: LOCAL_ONLY
-        - Modem: SHORT_FAST
-        - Node Broadcasts: DISABLED
-        - Position Broadcasts: DISABLED
-        - LED/Buzzer/Display: OFF
-        - MQTT/Telemetry: DISABLED
-        """.trimIndent()
-    }
-    
-    /**
-     * Get the current channel password from the UI or settings
-     */
-    private fun getCurrentChannelPassword(): String? {
-        // This will be implemented to get the password from the UI
-        return channelPassword
-    }
-    
     /**
      * Generate a 32-byte AES256 PSK from a password string
      * Using simple SHA-256 for now to match Meshtastic's expectations

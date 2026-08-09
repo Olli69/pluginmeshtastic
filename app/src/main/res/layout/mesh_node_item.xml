@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mesh_row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp"
+    android:paddingStart="8dp"
+    android:paddingEnd="8dp"
+    android:gravity="center_vertical"
+    android:baselineAligned="false">
+
+    <!-- Hop-depth accent stripe (colored per hop distance) -->
+    <View
+        android:id="@+id/hop_accent"
+        android:layout_width="4dp"
+        android:layout_height="34dp"
+        android:layout_marginEnd="10dp"
+        android:background="#FF555555" />
+
+    <!-- Node name -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/node_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Node"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFFFF"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/node_long"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="11sp"
+            android:textColor="#FF888888"
+            android:singleLine="true"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <!-- Signal: SNR bar + numeric SNR/RSSI -->
+    <LinearLayout
+        android:layout_width="128dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <LinearLayout
+            android:id="@+id/snr_bar"
+            android:layout_width="match_parent"
+            android:layout_height="9dp"
+            android:orientation="horizontal"
+            android:weightSum="5">
+
+            <View android:id="@+id/seg1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginEnd="2dp" android:background="#FF3A3A3A" />
+            <View android:id="@+id/seg2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginEnd="2dp" android:background="#FF3A3A3A" />
+            <View android:id="@+id/seg3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginEnd="2dp" android:background="#FF3A3A3A" />
+            <View android:id="@+id/seg4" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginEnd="2dp" android:background="#FF3A3A3A" />
+            <View android:id="@+id/seg5" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:background="#FF3A3A3A" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/node_signal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="11sp"
+            android:textColor="#FFAAAAAA"
+            android:paddingTop="3dp"
+            android:singleLine="true" />
+    </LinearLayout>
+
+    <!-- Battery + freshness -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:minWidth="52dp"
+        android:gravity="end">
+
+        <TextView
+            android:id="@+id/node_battery"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textSize="12sp"
+            android:textColor="#FFAAAAAA" />
+
+        <TextView
+            android:id="@+id/node_lastheard"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="11sp"
+            android:textColor="#FF888888" />
+    </LinearLayout>
+
+</LinearLayout>

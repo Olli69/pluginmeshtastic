@@ -2321,6 +2321,14 @@ message LockdownStatus {
      * Passphrase rejected. backoff_seconds is non-zero when rate-limited.
      */
     UNLOCK_FAILED = 4;
+
+    /*
+     * Lockdown is not active on this device: the firmware is lockdown-capable
+     * but has not been provisioned (or was just disabled), so it serves admin
+     * normally. This is the state a client toggles lockdown ON from, and the
+     * state reported after a successful disable.
+     */
+    DISABLED = 5;
   }
 
   /* Current lockdown state being reported. */
