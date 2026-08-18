@@ -1,0 +1,43 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+      
+    - name: Restore ATAK SDK
+     run: |
+       mkdir -p atak-civ-sdk
+       echo "${{ secrets.ATAK_SDK_BASE64 }}" | base64 -d > sdk.zip
+       unzip sdk.zip -d atak-civ-sdk
+    - name: Configure local.properties
+     run: |
+       cp template.local.properties local.properties
+       echo "sdk.dir=$ANDROID_HOME" >> local.properties
+       echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
+    
+    - name: Build with Gradle
+      run: ./gradlew :app:assembleCivDebug
+
+    - uses: actions/upload-artifact@v4
+     with:
+       name: pluginmeshtastic-debug
+       path: app/build/outputs/apk/**/*.apk
