@@ -58,16 +58,15 @@ buildscript {
         //    }
         //}
     }
-    dependencies {
+     dependencies {
         classpath 'com.android.tools.build:gradle:8.8.2'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0'
         classpath 'com.google.protobuf:protobuf-gradle-plugin:0.9.4'
-        if(isDevKitEnabled()) {
-            classpath "com.atakmap.gradle:atak-gradle-takdev:${takdevVersion}"
-        } else {
-            classpath files(takdevPlugin)
-        }
+        
+        // Korvataan se vanha classpath files(takdevPlugin) tai etäversio tällä kiinteällä polulla:
+        classpath files("../atak-civ-sdk/pluginsdk/repository/com/atakmap/gradle/atak-gradle-takdev/3.0.0/atak-gradle-takdev-3.0.0.jar")
     }
+
 }
 
 allprojects {
