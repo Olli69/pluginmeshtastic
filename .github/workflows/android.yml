@@ -34,14 +34,29 @@ jobs:
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
 
 
-      - name: Run Build safely without remote SDK
+      - name: Hae ATAK SDK julkisesta varastosta
         run: |
+          # Tehdään vale-android-polku valmiiksi
           mkdir -p fake-android-sdk
-          mkdir -p fake-atak-sdk/pluginsdk/repository
+          
+          # Haetaan se löytämäsi julkinen pluginsdk.zip
+          ALKU="https://github.com"
+          OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
+          curl -L -o pluginsdk.zip "$OSOITE"
+          unzip -q pluginsdk.zip -d tak-sdk-extracted
+  
+          # Etsitään missä se vaadittu .jar tiedosto fyysisesti on puretun paketin sisällä
+          JAR_POLKU=$(find $(pwd)/tak-sdk-extracted -name "atak-gradle-takdev*.jar" | head -n 1)
+          
+          # Luodaan local.properties ja pakotetaan koodisi ext.takdevPlugin lukemaan tämä tiedosto
           echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
-          echo "takdev.plugin=$(pwd)/fake-atak-sdk/pluginsdk" >> local.properties
+          echo "takdev.plugin=$JAR_POLKU" >> local.properties
+  
+      - name: Käännä APK virallisilla parametreilla
+        run: |
           chmod +x gradlew
-          ./gradlew :app:assembleCivDebug -PignoreAtakSdk=true || ./gradlew :app:assembleCivDebug
+          ./gradlew :app:assembleCivDebug
+
       
    
         
