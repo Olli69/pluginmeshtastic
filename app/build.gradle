@@ -292,6 +292,9 @@ def getCommandFlavor() {
 
 
 dependencies {
+    // Liitetään mukaan Gitistä ladatun virallisen SDK:n omat valmiit ATAK-kirjastot
+    compileOnly fileTree(dir: "../atak-civ-sdk/pluginsdk/repository/com/atakmap/app/atak-civ", include: ["*.jar"])
+
     implementation fileTree(dir: 'libs', include: '*.jar')
     
     // Protobuf for Meshtastic protocol
