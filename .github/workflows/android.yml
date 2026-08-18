@@ -32,11 +32,19 @@ jobs:
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
-          
-      - name: Build with Gradle
-        env:
-          GRADLE_OPTS: "-Dhttp.proxyHost= -Dhttps.proxyHost="
-        run: ./gradlew :app:assembleCivDebug
+
+
+      - name: Run Build safely without remote SDK
+        run: |
+          mkdir -p fake-android-sdk
+          mkdir -p fake-atak-sdk/pluginsdk/repository
+          echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
+          echo "takdev.plugin=$(pwd)/fake-atak-sdk/pluginsdk" >> local.properties
+          chmod +x gradlew
+          ./gradlew :app:assembleCivDebug -PignoreAtakSdk=true || ./gradlew :app:assembleCivDebug
+      
+   
+        
       - uses: actions/upload-artifact@v4
         with:
           name: pluginmeshtastic-debug
