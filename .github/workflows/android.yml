@@ -32,6 +32,8 @@ jobs:
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
           
       - name: Build with Gradle
+        env:
+          GRADLE_OPTS: "-Dhttp.proxyHost= -Dhttps.proxyHost="
         run: ./gradlew :app:assembleCivDebug
       - uses: actions/upload-artifact@v4
         with:
