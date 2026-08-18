@@ -18,17 +18,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Restore ATAK SDK
-        run: |
-          mkdir -p atak-civ-sdk
-          echo "${{ secrets.ATAK_SDK_BASE64 }}" | base64 -d > sdk.zip
-          unzip sdk.zip -d atak-civ-sdk
+
+
+      - name: Checkout ATAK-CIV SDK
+        uses: actions/checkout@v4
+        with:
+          repository: TAK-Product-Center/atak-civ
+          path: atak-civ-sdk
       - name: Configure local.properties
         run: |
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
-
+          
       - name: Build with Gradle
         run: ./gradlew :app:assembleCivDebug
       - uses: actions/upload-artifact@v4
