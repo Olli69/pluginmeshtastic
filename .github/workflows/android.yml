@@ -23,6 +23,8 @@ jobs:
       - name: Checkout ATAK-CIV SDK
         uses: actions/checkout@v4
         with:
+          submodules: 'recursive'
+          token: ${{ secrets.GITHUB_TOKEN }}
           repository: TAK-Product-Center/atak-civ
           path: atak-civ-sdk
       - name: Configure local.properties
