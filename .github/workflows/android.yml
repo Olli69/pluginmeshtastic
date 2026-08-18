@@ -33,26 +33,33 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
 
-      - name: Hyväksy Android SDK Lisenssit
+      - name: Hae ATAK SDK ja kopioi Android-lisenssit valekansioon
         run: |
-          yes | sdkmanager --licenses || true
-
-
-      - name: Hae ATAK SDK julkisesta varastosta
-        run: |
-          # Tehdään vale-android-polku valmiiksi
+          # Luodaan vale-android-polku valmiiksi
           mkdir -p fake-android-sdk
           
-          # Haetaan se löytämäsi julkinen pluginsdk.zip
+          # Kopioidaan GitHub-palvelimen valmiit, hyväksytyt Android-lisenssit suoraan valekansioon
+          if [ -d "$ANDROID_HOME/licenses" ]; then
+            cp -r "$ANDROID_HOME/licenses" ./fake-android-sdk/
+          elif [ -d "$ANDROID_SDK_ROOT/licenses" ]; then
+            cp -r "$ANDROID_SDK_ROOT/licenses" ./fake-android-sdk/
+          fi
+  
+          # Haetaan se julkinen pluginsdk.zip
           ALKU="https://github.com"
           OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
           curl -L -o pluginsdk.zip "$OSOITE"
           unzip -q pluginsdk.zip -d tak-sdk-extracted
   
-          # Kirjoitetaan polut suoraan kansiorakenteeseen, jotta arvo ei jää tyhjäksi
+          # Kirjoitetaan polut local.properties-tiedostoon
           echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
           echo "takdev.plugin=$(pwd)/tak-sdk-extracted/pluginsdk" >> local.properties
-  
+
+    - name: Käännä APK virallisilla parametreilla
+      run: |
+        chmod +x gradlew
+        ./gradlew :app:assembleCivDebug
+
       - name: Käännä APK virallisilla parametreilla
         run: |
           chmod +x gradlew
