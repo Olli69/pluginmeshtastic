@@ -45,19 +45,17 @@ jobs:
           curl -L -o pluginsdk.zip "$OSOITE"
           unzip -q pluginsdk.zip -d tak-sdk-extracted
   
-          # Etsitään missä se vaadittu .jar tiedosto fyysisesti on puretun paketin sisällä
-          JAR_POLKU=$(find $(pwd)/tak-sdk-extracted -name "atak-gradle-takdev*.jar" | head -n 1)
-          
-          # Luodaan local.properties ja pakotetaan koodisi ext.takdevPlugin lukemaan tämä tiedosto
+          # Kirjoitetaan polut suoraan kansiorakenteeseen, jotta arvo ei jää tyhjäksi
           echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
-          echo "takdev.plugin=$JAR_POLKU" >> local.properties
+          echo "takdev.plugin=$(pwd)/tak-sdk-extracted/pluginsdk" >> local.properties
   
       - name: Käännä APK virallisilla parametreilla
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleCivDebug
-
-      
+  
+  
+        
    
         
       - uses: actions/upload-artifact@v4
