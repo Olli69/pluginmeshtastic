@@ -216,8 +216,10 @@ android {
             // It is strongly encouraged that plugin developers do not modify the archiveBaseName, version code logic and version 
             // name logic to provide for consistency within the community.   
             setProperty("archivesBaseName", "ATAK-Plugin-" + rootProject.name + "-" + PLUGIN_VERSION + "-" + getVersionName() + "-" + ATAK_VERSION)
-            defaultConfig.versionCode = getVersionCode()
-            defaultConfig.versionName = PLUGIN_VERSION + " (" + getVersionName() + ") - [" + ATAK_VERSION + "]"
+            setProperty("archivesBaseName", "ATAK-Plugin-Meshtastic-Custom")
+            defaultConfig.versionCode = 1
+            defaultConfig.versionName = "1.0-CUSTOM"
+
         }
 
         gov.java.srcDirs 'src/gov/java'
