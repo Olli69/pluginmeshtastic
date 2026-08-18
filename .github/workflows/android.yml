@@ -33,6 +33,9 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk" >> local.properties
 
+      - name: Hyväksy Android SDK Lisenssit
+        run: |
+          yes | sdkmanager --licenses || true
 
 
       - name: Hae ATAK SDK julkisesta varastosta
