@@ -38,6 +38,11 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk/pluginsdk" >> local.properties
 
+      - name: Luo puuttuva allekirjoituskansio allekirjoitusta varten
+        run: |
+          mkdir -p app/build
+          touch app/build/android_keystore
+            
       - name: Käännä APK virallisilla parametreilla
         run: ./gradlew :app:assembleCivDebug
 
