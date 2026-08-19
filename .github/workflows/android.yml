@@ -20,16 +20,17 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Lataa ATAK SDK Gitillä ja asenna järjestelmään
+      - name: Lataa ATAK SDK ilman LFS-jättitiedostoja ja asenna järjestelmään
         run: |
-          # 1. Haetaan virallinen ATAK-CIV koodivarasto Git-komennolla (koko n. 50-100MB)
+          # 1. Pakotetaan Git ohittamaan LFS-budjettimuuri (ladataan vain koodit, ei kuvia/ikoneita)
           ALKU="https://github.com"
+          export GIT_LFS_SKIP_SMUDGE=1
           git clone --recursive "${ALKU}/TAK-Product-Center/atak-civ.git" extracted-sdk
           
           # 2. Mennään suoraan sen toimivan työkalukansion sisään
           cd extracted-sdk/pluginsdk
           
-          # 3. Ajetaan asennuskomento, joka rekisteröi 'atak-takdev-plugin' järjestelmän Maven-muistiin
+          # 3. Ajetaan asennuskomento, joka rekisteröi työkalun järjestelmän muistiin
           chmod +x gradlew
           ./gradlew publishToMavenLocal
 
@@ -38,6 +39,7 @@ jobs:
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
           echo "takdev.plugin=$(pwd)/extracted-sdk/pluginsdk" >> local.properties
+
 
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
