@@ -22,23 +22,25 @@ jobs:
 
       - name: Lataa ATAK SDK ilman LFS-jättitiedostoja ja asenna järjestelmään
         run: |
-          # 1. Pakotetaan Git ohittamaan LFS-budjettimuuri (ladataan vain koodit, ei kuvia/ikoneita)
+          # 1. Ohitetaan LFS-budjettimuuri
           ALKU="https://github.com"
           export GIT_LFS_SKIP_SMUDGE=1
           git clone --recursive "${ALKU}/TAK-Product-Center/atak-civ.git" extracted-sdk
           
-          # 2. Mennään suoraan sen toimivan työkalukansion sisään
-          cd extracted-sdk/pluginsdk
+          # 2. Etsitään automaattisesti se kansio, jonka sisältä löytyy gradlew-käynnistin
+          SDK_DIR=$(find $(pwd)/extracted-sdk -type d -name "pluginsdk" | head -n 1)
+          echo "Löytyi SDK-kansio polusta: $SDK_DIR"
+          cd "$SDK_DIR"
           
           # 3. Ajetaan asennuskomento, joka rekisteröi työkalun järjestelmän muistiin
           chmod +x gradlew
           ./gradlew publishToMavenLocal
 
           # 4. Palataan projektin juureen ja luodaan local.properties
-          cd ../..
+          cd "${{ github.workspace }}"
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          echo "takdev.plugin=$(pwd)/extracted-sdk/pluginsdk" >> local.properties
+          echo "takdev.plugin=$SDK_DIR" >> local.properties
 
 
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
