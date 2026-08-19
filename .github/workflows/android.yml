@@ -20,24 +20,38 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Lataa puuttuva työkalu ja luo local.properties lisensseillä
+      - name: Lataa puuttuva työkalu ja pura AAR-moottorit sovellukseen
         run: |
-          # 1. Luodaan vale-android-polku ja fake-plugin kansiot valmiiksi
+          # 1. Luodaan vaaditut kansiorakenteet valmiiksi
           mkdir -p fake-android-sdk
           mkdir -p fake-plugin
+          mkdir -p app/libs
           
-          # 2. Kopioidaan GitHub-palvelimen valmiit, hyväksytyt viralliset Android-lisenssit suoraan valekansioon
+          # 2. Kopioidaan Android-lisenssit valekansioon (tämä toimii jo täydellisesti)
           if [ -d "$ANDROID_HOME/licenses" ]; then
             cp -r "$ANDROID_HOME/licenses" ./fake-android-sdk/
           elif [ -d "$ANDROID_SDK_ROOT/licenses" ]; then
             cp -r "$ANDROID_SDK_ROOT/licenses" ./fake-android-sdk/
           fi
           
-          # 3. Ladataan valmis atak-gradle-takdev.jar suoraan toimivasta julkisesta lähteestä
+          # 3. Ladataan valmis työkalu (atak-gradle-takdev.jar) suoraan toimivasta julkisesta lähteestä
           ALKU="https://github.com"
           curl -L -o fake-plugin/atak-gradle-takdev.jar "${ALKU}/meshtastic/pluginmeshtastic/raw/main/atak-gradle-takdev.jar" || curl -L -o fake-plugin/atak-gradle-takdev.jar "${ALKU}/Olli69/pluginmeshtastic/raw/main/atak-gradle-takdev.jar"
 
-          # 4. Kirjoitetaan polut local.properties-tiedostoon
+          # 4. Haetaan julkinen pluginsdk.zip ja IMEETÄÄN sieltä puuttuvat ATAK-moottorit (AtakPreferences jne.) suoraan sovelluksen libs-kansioon
+          curl -L -o pluginsdk.zip "${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip" || curl -L -o pluginsdk.zip "${ALKU}/Olli69/pluginmeshtastic/raw/main/pluginsdk.zip"
+          unzip -q pluginsdk.zip -d tak-sdk-extracted
+
+          # Etsitään ja puretaan kaikki .aar-tiedostojen sisältämät classes.jar-moottorit suoraan sovelluksen libs-kansioon
+          find tak-sdk-extracted -name "*.aar" | while read -r aar_file; do
+            RANDOM_NAME=$(basename "$aar_file" .aar)
+            unzip -p "$aar_file" classes.jar > "app/libs/${RANDOM_NAME}-classes.jar" || true
+          done
+          
+          # Kopioidaan myös valmiit .jar tiedostot samaan paikkaan
+          find tak-sdk-extracted -name "*.jar" -exec cp {} app/libs/ \;
+
+          # 5. Kirjoitetaan polut local.properties-tiedostoon
           echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
           echo "takdev.plugin=$(pwd)/fake-plugin" >> local.properties
 
