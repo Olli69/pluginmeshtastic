@@ -50,13 +50,13 @@ buildscript {
         maven {
             url "https://jitpack.io"
         }
-        maven {
-            url = takrepoUrl
-            credentials {
-                username = takrepoUser
-                password = takrepoPassword
-            }
-        }
+       // maven {
+       //     url = takrepoUrl
+       //     credentials {
+       //         username = takrepoUser
+       //         password = takrepoPassword
+       //     }
+       // }
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.8.2'
