@@ -20,20 +20,27 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Hae ja pura virallinen ATAK SDK suoraan juureen
+      - name: Lataa ATAK SDK ja asenna se järjestelmään
         run: |
-          # 1. Haetaan se aito julkinen pluginsdk.zip nettiosoitteesta
+          # 1. Haetaan se virallinen julkinen pluginsdk.zip nettiosoitteesta
           ALKU="https://github.com"
           OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
           curl -L -o pluginsdk.zip "$OSOITE"
           
-          # 2. Puretaan zip-paketti suoraan kansioon nimeltä 'fake-plugin'
-          unzip -q pluginsdk.zip -d fake-plugin
+          # 2. Puretaan zip-paketti
+          unzip -q pluginsdk.zip -d extracted-sdk
 
-          # 3. Luodaan local.properties ja ohjataan takdev.plugin suoraan siihen purettuun kansioon
+          # 3. Mennään ladatun SDK:n sisään ja ajetaan sen oma virallinen asennuskomento,
+          # joka rekisteröi 'atak-takdev-plugin' -työkalun osaksi järjestelmän Maven-muistia.
+          cd extracted-sdk/pluginsdk
+          chmod +x gradlew
+          ./gradlew publishToMavenLocal
+
+          # 4. Palataan takaisin projektin juureen ja luodaan local.properties
+          cd ../..
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          echo "takdev.plugin=$(pwd)/fake-plugin/pluginsdk" >> local.properties
+          echo "takdev.plugin=$(pwd)/extracted-sdk/pluginsdk" >> local.properties
 
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
