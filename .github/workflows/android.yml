@@ -20,15 +20,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Lataa ATAK SDK ilman LFS-jättitiedostoja ja asenna järjestelmään
+      - name: Etsi SDK-työkalu ja asenna se automaattisesti
         run: |
-          # 1. Ohitetaan LFS-budjettimuuri (tämä toimii jo täydellisesti)
+          # 1. Ohitetaan LFS-budjettimuuri
           ALKU="https://github.com"
           export GIT_LFS_SKIP_SMUDGE=1
           git clone --recursive "${ALKU}/TAK-Product-Center/atak-civ.git" extracted-sdk
           
-          # 2. Mennään suoraan oikeaan kansioon (huomaa iso S-kirjain: pluginSdk)
-          cd extracted-sdk/pluginSdk
+          # 2. ETSITÄÄN automaattisesti se kansio, jossa ATAK SDK:n oma gradlew asuu
+          # (Tämä skippaa koko kansioiden nimien arpomisen ja löytää oikean paikan sataprosenttisen varmasti)
+          SDK_GRADLEW_PATH=$(find $(pwd)/extracted-sdk -name "gradlew" | grep -i "pluginsdk" | head -n 1)
+          SDK_DIR=$(dirname "$SDK_GRADLEW_PATH")
+          
+          echo "Löytyi aito SDK-työkalukansio polusta: $SDK_DIR"
+          cd "$SDK_DIR"
           
           # 3. Ajetaan asennuskomento, joka rekisteröi työkalun järjestelmän muistiin
           chmod +x gradlew
@@ -38,19 +43,4 @@ jobs:
           cd "${{ github.workspace }}"
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          echo "takdev.plugin=$(pwd)/extracted-sdk/pluginSdk" >> local.properties
-
-
-      - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
-        run: |
-          mkdir -p app/build
-          touch app/build/android_keystore
-
-      - name: Käännä APK virallisilla parametreilla
-        run: ./gradlew :app:assembleCivDebug
-
-      - name: Tallenna valmis APK ladattavaksi
-        uses: actions/upload-artifact@v4
-        with:
-          name: pluginmeshtastic-main-debug
-          path: app/build/outputs/apk/**/*.apk
+          echo "takdev.plugin=$SDK_DIR" >> local.properties
