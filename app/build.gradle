@@ -68,7 +68,9 @@ buildscript {
         } else {
             classpath files(takdevPlugin)
         }*/
-        classpath files("../atak-civ-sdk/pluginsdk/repository/com/atakmap/gradle/atak-gradle-takdev/3.0.0/atak-gradle-takdev-3.0.0.jar")
+        //classpath files("../atak-civ-sdk/pluginsdk/repository/com/atakmap/gradle/atak-gradle-takdev/3.0.0/atak-gradle-takdev-3.0.0.jar")
+        // Luetaan työkalu suoraan local.properties-tiedostoon syötetystä muuttujasta
+        classpath files(takdevPlugin)
 
     }
 }
