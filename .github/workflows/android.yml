@@ -1,7 +1,7 @@
 name: Android CI
 
 on:
-  workflow_dispatch: # Tämä lisää harmaan "Run workflow" -painikkeen, jolla voit käynnistää käännöksen käsin
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,32 +20,21 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Checkout ATAK-CIV SDK
-        uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: TAK-Product-Center/atak-civ
-          path: atak-civ-sdk
-
-    
-      - name: Configure local.properties and accept licenses
+      - name: Hae ja pura virallinen ATAK SDK suoraan juureen
         run: |
-          yes | sdkmanager --licenses || true
+          # 1. Haetaan se aito julkinen pluginsdk.zip nettiosoitteesta
+          ALKU="https://github.com"
+          OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
+          curl -L -o pluginsdk.zip "$OSOITE"
           
-          # Etsitään missä se 'pluginsdk'-kansio (jossa on build.gradle ja repository) oikeasti luuraa
-          REAL_SDK_PATH=$(find ${{ github.workspace }}/atak-civ-sdk -type d -name "pluginsdk" | head -n 1)
-          
-          # Kopioidaan koko kansio suoraan tähän projektin juureen helpoksi 'fake-plugin' kansioksi
-          cp -r "$REAL_SDK_PATH" ./fake-plugin
-          
-          # Luodaan local.properties ja ohjataan se lukemaan tätä juuri tehtyä kansiota
+          # 2. Puretaan zip-paketti suoraan kansioon nimeltä 'fake-plugin'
+          unzip -q pluginsdk.zip -d fake-plugin
+
+          # 3. Luodaan local.properties ja ohjataan takdev.plugin suoraan siihen purettuun kansioon
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          echo "takdev.plugin=$(pwd)/fake-plugin" >> local.properties
+          echo "takdev.plugin=$(pwd)/fake-plugin/pluginsdk" >> local.properties
 
-
-      
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
           mkdir -p app/build
