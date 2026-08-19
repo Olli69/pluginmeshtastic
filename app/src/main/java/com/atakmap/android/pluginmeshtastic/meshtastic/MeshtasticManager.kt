@@ -294,7 +294,7 @@ class MeshtasticManager(private val context: Context) : RadioCallback {
                     // TAK configuration is now manual - user must click button in UI
                      if (configManager != null && configManager?.configState?.value == MeshtasticConfigManager.ConfigurationState.UNCONFIGURED) {
                          Log.i(TAG, "Starting TAK configuration after interface stabilization")
-                         configManager?.startConfiguration()
+                        // configManager?.startConfiguration()
                      }
                 }
                 
