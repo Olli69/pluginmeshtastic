@@ -32,8 +32,6 @@ jobs:
           path: atak-civ-sdk
 
       - name: Hae ATAK-kirjastot ja kopioi ne suoraan sovellukseen
-
-      - name: Hae ATAK-kirjastot ja kopioi ne suoraan sovellukseen
         run: |
           # Tehdään vale-android-polku valmiiksi
           mkdir -p fake-android-sdk
