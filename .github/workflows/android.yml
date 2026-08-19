@@ -1,0 +1,50 @@
+name: Android CI
+
+on:
+  workflow_dispatch: # Tämä lisää harmaan "Run workflow" -painikkeen, jolla voit käynnistää käännöksen käsin
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pluginmeshtastic
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Checkout ATAK-CIV SDK
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: TAK-Product-Center/atak-civ
+          path: atak-civ-sdk
+
+      - name: Configure local.properties and accept licenses
+        run: |
+          yes | sdkmanager --licenses || true
+          cp template.local.properties local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> local.properties
+          echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk/pluginsdk" >> local.properties
+
+      - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
+        run: |
+          mkdir -p app/build
+          touch app/build/android_keystore
+
+      - name: Käännä APK virallisilla parametreilla
+        run: ./gradlew :app:assembleCivDebug
+
+      - name: Tallenna valmis APK ladattavaksi
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginmeshtastic-main-debug
+          path: app/build/outputs/apk/**/*.apk
