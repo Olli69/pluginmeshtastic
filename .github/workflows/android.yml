@@ -42,7 +42,6 @@ jobs:
           echo "takdev.plugin=$(pwd)/fake-plugin" >> local.properties
 
 
-
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
           mkdir -p app/build
