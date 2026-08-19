@@ -20,23 +20,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Lataa ATAK SDK ja asenna se järjestelmään
+      - name: Lataa ATAK SDK Gitillä ja asenna järjestelmään
         run: |
-          # 1. Haetaan se virallinen julkinen pluginsdk.zip nettiosoitteesta
+          # 1. Haetaan virallinen ATAK-CIV koodivarasto Git-komennolla (koko n. 50-100MB)
           ALKU="https://github.com"
-          OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
-          curl -L -o pluginsdk.zip "$OSOITE"
+          git clone --recursive "${ALKU}/TAK-Product-Center/atak-civ.git" extracted-sdk
           
-          # 2. Puretaan zip-paketti
-          unzip -q pluginsdk.zip -d extracted-sdk
-
-          # 3. Mennään ladatun SDK:n sisään ja ajetaan sen oma virallinen asennuskomento,
-          # joka rekisteröi 'atak-takdev-plugin' -työkalun osaksi järjestelmän Maven-muistia.
+          # 2. Mennään suoraan sen toimivan työkalukansion sisään
           cd extracted-sdk/pluginsdk
+          
+          # 3. Ajetaan asennuskomento, joka rekisteröi 'atak-takdev-plugin' järjestelmän Maven-muistiin
           chmod +x gradlew
           ./gradlew publishToMavenLocal
 
-          # 4. Palataan takaisin projektin juureen ja luodaan local.properties
+          # 4. Palataan projektin juureen ja luodaan local.properties
           cd ../..
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
