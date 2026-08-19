@@ -31,6 +31,39 @@ jobs:
           repository: TAK-Product-Center/atak-civ
           path: atak-civ-sdk
 
+      - name: Hae ATAK-kirjastot ja kopioi ne suoraan sovellukseen
+
+      - name: Hae ATAK-kirjastot ja kopioi ne suoraan sovellukseen
+        run: |
+          # Tehdään vale-android-polku valmiiksi
+          mkdir -p fake-android-sdk
+          
+          # Haetaan se virallinen julkinen pluginsdk.zip
+          ALKU="https://github.com"
+          OSOITE="${ALKU}/TAK-Product-Center/atak-civ/raw/main/pluginsdk.zip"
+          curl -L -o pluginsdk.zip "$OSOITE"
+          unzip -q pluginsdk.zip -d tak-sdk-extracted
+
+          # Luodaan sovelluksen oma libs-kansio, jos sitä ei ole
+          mkdir -p app/libs
+
+          # ETSITÄÄN ja KOPIOIDAAN kaikki ATAK-moottorin .jar-tiedostot suoraan sovelluksen sisään
+          find tak-sdk-extracted -name "*.jar" -exec cp {} app/libs/ \;
+
+          # Kirjoitetaan peruspolut local.properties-tiedostoon varmuuden vuoksi
+          echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
+          echo "takdev.plugin=$(pwd)/tak-sdk-extracted/pluginsdk" >> local.properties
+
+          # Luodaan sovelluksen oma libs-kansio, jos sitä ei ole
+          mkdir -p app/libs
+
+          # ETSITÄÄN ja KOPIOIDAAN kaikki ATAK-moottorin .jar-tiedostot suoraan sovelluksen sisään
+          find tak-sdk-extracted -name "*.jar" -exec cp {} app/libs/ \;
+
+          # Kirjoitetaan peruspolut local.properties-tiedostoon varmuuden vuoksi
+          echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
+          echo "takdev.plugin=$(pwd)/tak-sdk-extracted/pluginsdk" >> local.properties
+
       - name: Configure local.properties and accept licenses
         run: |
           yes | sdkmanager --licenses || true
