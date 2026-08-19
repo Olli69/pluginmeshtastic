@@ -59,7 +59,7 @@ buildscript {
        // }
     }
     dependencies {
-        implementation fileTree(dir: 'libs', include: ['*.jar'])
+        compileOnly fileTree(dir: 'libs', include: ['*.jar'])
         classpath 'com.android.tools.build:gradle:8.8.2'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0'
         classpath 'com.google.protobuf:protobuf-gradle-plugin:0.9.4'
