@@ -31,10 +31,11 @@ jobs:
           repository: TAK-Product-Center/atak-civ
           path: atak-civ-sdk
 
-      - name: Hae ATAK-kirjastot ja kopioi ne suoraan sovellukseen
+      - name: Hae ATAK-kirjastot ja pura AAR-moottorit sovellukseen
         run: |
-          # Tehdään vale-android-polku valmiiksi
+          # Luodaan vale-android-polku ja libs-kansiot valmiiksi
           mkdir -p fake-android-sdk
+          mkdir -p app/libs
           
           # Haetaan se virallinen julkinen pluginsdk.zip
           ALKU="https://github.com"
@@ -42,21 +43,15 @@ jobs:
           curl -L -o pluginsdk.zip "$OSOITE"
           unzip -q pluginsdk.zip -d tak-sdk-extracted
 
-          # Luodaan sovelluksen oma libs-kansio, jos sitä ei ole
-          mkdir -p app/libs
-
-          # ETSITÄÄN ja KOPIOIDAAN kaikki ATAK-moottorin .jar-tiedostot suoraan sovelluksen sisään
+          # 1. Kopioidaan kaikki standardit .jar tiedostot libs-kansioon
           find tak-sdk-extracted -name "*.jar" -exec cp {} app/libs/ \;
 
-          # Kirjoitetaan peruspolut local.properties-tiedostoon varmuuden vuoksi
-          echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
-          echo "takdev.plugin=$(pwd)/tak-sdk-extracted/pluginsdk" >> local.properties
-
-          # Luodaan sovelluksen oma libs-kansio, jos sitä ei ole
-          mkdir -p app/libs
-
-          # ETSITÄÄN ja KOPIOIDAAN kaikki ATAK-moottorin .jar-tiedostot suoraan sovelluksen sisään
-          find tak-sdk-extracted -name "*.jar" -exec cp {} app/libs/ \;
+          # 2. Kopioidaan ja puretaan kaikki .aar tiedostot, jotta Kotlin löytää luokat (AtakPreferences jne.)
+          find tak-sdk-extracted -name "*.aar" | while read -r aar_file; do
+            # Puretaan jokaisen .aar-tiedoston sisällä oleva classes.jar suoraan libs-kansioon yksilöllisellä nimellä
+            RANDOM_NAME=$(basename "$aar_file" .aar)
+            unzip -p "$aar_file" classes.jar > "app/libs/${RANDOM_NAME}-classes.jar" || true
+          done
 
           # Kirjoitetaan peruspolut local.properties-tiedostoon varmuuden vuoksi
           echo "sdk.dir=$(pwd)/fake-android-sdk" > local.properties
