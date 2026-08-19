@@ -33,7 +33,6 @@ jobs:
           yes | sdkmanager --licenses || true
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-         // echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk/pluginsdk" >> local.properties
           echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk/pluginsdk/pluginsdk" >> local.properties
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
