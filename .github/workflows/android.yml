@@ -28,12 +28,24 @@ jobs:
           repository: TAK-Product-Center/atak-civ
           path: atak-civ-sdk
 
+    
       - name: Configure local.properties and accept licenses
         run: |
           yes | sdkmanager --licenses || true
+          
+          # Etsitään missä se 'pluginsdk'-kansio (jossa on build.gradle ja repository) oikeasti luuraa
+          REAL_SDK_PATH=$(find ${{ github.workspace }}/atak-civ-sdk -type d -name "pluginsdk" | head -n 1)
+          
+          # Kopioidaan koko kansio suoraan tähän projektin juureen helpoksi 'fake-plugin' kansioksi
+          cp -r "$REAL_SDK_PATH" ./fake-plugin
+          
+          # Luodaan local.properties ja ohjataan se lukemaan tätä juuri tehtyä kansiota
           cp template.local.properties local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          echo "takdev.plugin=${{ github.workspace }}/atak-civ-sdk/pluginsdk/pluginsdk" >> local.properties
+          echo "takdev.plugin=$(pwd)/fake-plugin" >> local.properties
+
+
+      
       - name: Luo tyhjä allekirjoitustiedosto hämäykseksi
         run: |
           mkdir -p app/build
